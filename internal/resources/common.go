@@ -18,6 +18,7 @@ package resources
 
 import (
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -269,4 +270,17 @@ func MetricsPort(instance *openclawv1alpha1.OpenClawInstance) int32 {
 // Ptr returns a pointer to the given value
 func Ptr[T any](v T) *T {
 	return &v
+}
+
+// ParseQuantity parses a string into a resource.Quantity, falling back to
+// the default if parsing fails. Prevents panics from resource.MustParse.
+func ParseQuantity(s string, defaultValue string) resource.Quantity {
+	if s == "" {
+		return resource.MustParse(defaultValue)
+	}
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return resource.MustParse(defaultValue)
+	}
+	return q
 }
