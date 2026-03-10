@@ -44,7 +44,7 @@ Configuration for the OpenClaw application (`openclaw.json`).
 |----------------|-----------------------|---------------|----------------------------------------------------------------------------|
 | `configMapRef` | `ConfigMapKeySelector`| --            | Reference to an external ConfigMap. If set, `raw` is ignored.              |
 | `raw`          | `RawConfig`           | --            | Inline JSON configuration. The operator creates a managed ConfigMap.       |
-| `mergeMode`    | `string`              | `overwrite`   | How config is applied to the PVC. `overwrite` replaces on every restart. `merge` deep-merges with existing PVC config, preserving runtime changes. |
+| `mergeMode`    | `string`              | `overwrite`   | How config is applied to the PVC. `overwrite` replaces on every restart. `merge` deep-merges with existing PVC config, preserving runtime changes. **Caveat:** in merge mode, removing a key from the CR does not delete it from the PVC - temporarily use `replace` to wipe stale keys. |
 | `format`       | `string`              | `json`        | Config file format. `json` (standard JSON) or `json5` (JSON5 with comments/trailing commas). JSON5 requires `configMapRef` - inline `raw` must be valid JSON. JSON5 is converted to standard JSON by the init container using npx json5. |
 
 **ConfigMapKeySelector:**
@@ -763,7 +763,9 @@ When `existingSecret` is not set, the operator automatically generates a random 
 
 **Auto-injected settings:**
 
-The operator always injects `gateway.controlUi.dangerouslyDisableDeviceAuth: true` into the config JSON. Device pairing (introduced in OpenClaw v2026.3.2) is fundamentally incompatible with Kubernetes because users cannot approve pairing from inside a container, connections always come through the nginx proxy sidecar (non-local), and mDNS is unavailable. If you explicitly set `gateway.controlUi.dangerouslyDisableDeviceAuth` in your config, your value takes precedence.
+The operator always injects `gateway.controlUi.dangerouslyDisableDeviceAuth: true` into the config JSON. Device pairing (introduced in OpenClaw v2026.3.2) is fundamentally incompatible with Kubernetes because users cannot approve pairing from inside a container, connections always come through the nginx proxy sidecar (non-local), and mDNS is unavailable. If you explicitly set `gateway.controlUi.dangerouslyDisableDeviceAuth` in your config, your value takes precedence. **Do not set `gateway.mode: local`** - this desktop-only mode enforces device identity checks that cannot work behind a reverse proxy.
+
+When accessing the Control UI through an Ingress, authenticate by appending the gateway token to the URL fragment: `https://openclaw.example.com/#token=<your-token>`.
 
 The operator auto-injects `gateway.controlUi.allowedOrigins` into the config JSON with:
 - **Localhost** (always): `http://localhost:18789`, `http://127.0.0.1:18789`
