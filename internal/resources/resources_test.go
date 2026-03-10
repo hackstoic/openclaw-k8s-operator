@@ -6781,27 +6781,36 @@ func TestBuildNetworkPolicy_TailscaleEgress(t *testing.T) {
 
 	np := BuildNetworkPolicy(instance)
 
-	// Default egress: DNS (0), HTTPS (1), Tailscale STUN+WireGuard (2)
-	if len(np.Spec.Egress) < 3 {
-		t.Fatalf("expected at least 3 egress rules, got %d", len(np.Spec.Egress))
+	// Default egress: DNS (0), HTTPS (1), K8s API 6443 (2), Tailscale STUN+WireGuard (3)
+	if len(np.Spec.Egress) < 4 {
+		t.Fatalf("expected at least 4 egress rules, got %d", len(np.Spec.Egress))
 	}
 
-	tsRule := np.Spec.Egress[2]
-	if len(tsRule.Ports) != 2 {
-		t.Fatalf("expected 2 Tailscale egress ports, got %d", len(tsRule.Ports))
-	}
-
+	// Verify K8s API port 6443 is included (tailscale needs it for state secret)
+	found6443 := false
 	foundSTUN := false
 	foundWG := false
-	for _, p := range tsRule.Ports {
-		if p.Protocol != nil && *p.Protocol == corev1.ProtocolUDP && p.Port != nil {
+	for _, rule := range np.Spec.Egress {
+		for _, p := range rule.Ports {
+			if p.Port == nil {
+				continue
+			}
 			switch p.Port.IntValue() {
+			case 6443:
+				found6443 = true
 			case 3478:
-				foundSTUN = true
+				if p.Protocol != nil && *p.Protocol == corev1.ProtocolUDP {
+					foundSTUN = true
+				}
 			case 41641:
-				foundWG = true
+				if p.Protocol != nil && *p.Protocol == corev1.ProtocolUDP {
+					foundWG = true
+				}
 			}
 		}
+	}
+	if !found6443 {
+		t.Error("expected K8s API egress rule (TCP 6443) for tailscale state secret")
 	}
 	if !foundSTUN {
 		t.Error("expected STUN egress rule (UDP 3478)")
@@ -8258,13 +8267,14 @@ func TestBuildNetworkPolicy_SelfConfigureEgress(t *testing.T) {
 
 func TestBuildNetworkPolicy_SelfConfigureDisabledNo6443(t *testing.T) {
 	instance := newTestInstance("sc-netpol-off")
+	// Both selfConfigure and tailscale are disabled by default
 
 	np := BuildNetworkPolicy(instance)
 
 	for _, rule := range np.Spec.Egress {
 		for _, port := range rule.Ports {
 			if port.Port != nil && port.Port.IntValue() == 6443 {
-				t.Error("NetworkPolicy should NOT have port 6443 when self-configure is disabled")
+				t.Error("NetworkPolicy should NOT have port 6443 when both self-configure and tailscale are disabled")
 			}
 		}
 	}
