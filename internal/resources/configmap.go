@@ -587,6 +587,13 @@ events {
 }
 
 http {
+    # Redirect temp/cache dirs to writable /tmp (rootfs is read-only)
+    client_body_temp_path /tmp/client_body;
+    proxy_temp_path /tmp/proxy;
+    fastcgi_temp_path /tmp/fastcgi;
+    uwsgi_temp_path /tmp/uwsgi;
+    scgi_temp_path /tmp/scgi;
+
     map $is_args $launch_sep {
         "?"     "&";
         default "?";
