@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0](https://github.com/openclaw-rocks/k8s-operator/compare/v0.11.2...v0.12.0) (2026-03-10)
+
+
+### Features
+
+* apply registry override to init container images ([34aca73](https://github.com/openclaw-rocks/k8s-operator/commit/34aca73a55c773f854c476ae3c1d5c5f73f2a6a4))
+* **operator:** add global container image registry override field ([589ddf4](https://github.com/openclaw-rocks/k8s-operator/commit/589ddf44a207b8a66c4c2d10e030dc528275922b))
+* **operator:** add global container image registry override field ([3dfa1d0](https://github.com/openclaw-rocks/k8s-operator/commit/3dfa1d0304432d06bc9f8fe861ad49b023353628))
+
+
+### Bug Fixes
+
+* **chromium:** route WebSocket connections to /chromium endpoint for launch args ([c39bc45](https://github.com/openclaw-rocks/k8s-operator/commit/c39bc45d82121ce8f375cea91a07c87391056730)), closes [#270](https://github.com/openclaw-rocks/k8s-operator/issues/270)
+* **chromium:** route WebSocket to /chromium endpoint for launch args ([0e39b89](https://github.com/openclaw-rocks/k8s-operator/commit/0e39b892d56e0764a24f74bbda6cf13b965e0212))
+* **resources:** handle trailing slash in registry override. ([6ba4b94](https://github.com/openclaw-rocks/k8s-operator/commit/6ba4b94835cb543b21bfb34ea82cbe3698059ddd))
+
 ## [0.11.2](https://github.com/openclaw-rocks/k8s-operator/compare/v0.11.1...v0.11.2) (2026-03-10)
 
 
