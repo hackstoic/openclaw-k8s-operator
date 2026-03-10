@@ -4783,7 +4783,7 @@ func TestBuildInitScript_MergeMode_NoConfig(t *testing.T) {
 
 func TestParseSkillEntry_ClawHub(t *testing.T) {
 	got := parseSkillEntry("@anthropic/mcp-server-fetch")
-	want := "npx -y clawhub install '@anthropic/mcp-server-fetch'"
+	want := "_install_skill '@anthropic/mcp-server-fetch'"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -4825,11 +4825,11 @@ func TestBuildSkillsScript_WithSkills(t *testing.T) {
 	if !strings.Contains(script, skillInstallWrapper) {
 		t.Error("script should contain the _install_skill wrapper")
 	}
-	if lines[0] != "npx -y clawhub install '@anthropic/mcp-server-fetch'" {
-		t.Errorf("line 0: %q", lines[0])
+	if !strings.Contains(script, "_install_skill '@anthropic/mcp-server-fetch'") {
+		t.Error("script should contain _install_skill for @anthropic/mcp-server-fetch")
 	}
-	if lines[1] != "npx -y clawhub install '@github/copilot-skill'" {
-		t.Errorf("line 1: %q", lines[1])
+	if !strings.Contains(script, "_install_skill '@github/copilot-skill'") {
+		t.Error("script should contain _install_skill for @github/copilot-skill")
 	}
 }
 
@@ -4858,15 +4858,64 @@ func TestBuildSkillsScript_MixedPrefixes(t *testing.T) {
 	if !strings.Contains(script, "cd /home/openclaw/.openclaw && npm install 'some-tool'") {
 		t.Error("script should contain npm install for some-tool")
 	}
-	// Sorted: @anthropic/... < npm:@openclaw/... < npm:some-tool
-	if lines[0] != "npx -y clawhub install '@anthropic/mcp-server-fetch'" {
-		t.Errorf("line 0: %q", lines[0])
+}
+
+func TestBuildSkillsScript_OnlyNpmSkills_NoWrapper(t *testing.T) {
+	instance := newTestInstance("npm-only")
+	instance.Spec.Skills = []string{"npm:@openclaw/matrix", "npm:some-tool"}
+
+	script := BuildSkillsScript(instance)
+
+	if !strings.HasPrefix(script, "set -e\n") {
+		t.Error("script should start with set -e")
 	}
-	if lines[1] != "cd /home/openclaw/.openclaw && npm install '@openclaw/matrix'" {
-		t.Errorf("line 1: %q", lines[1])
+	if strings.Contains(script, "_install_skill") {
+		t.Error("script should not contain _install_skill wrapper when only npm skills")
 	}
-	if lines[2] != "cd /home/openclaw/.openclaw && npm install 'some-tool'" {
-		t.Errorf("line 2: %q", lines[2])
+	if !strings.Contains(script, "npm install") {
+		t.Error("script should contain npm install commands")
+	}
+}
+
+func TestHasClawHubSkills(t *testing.T) {
+	tests := []struct {
+		name   string
+		skills []string
+		want   bool
+	}{
+		{"empty", nil, false},
+		{"only npm", []string{"npm:foo", "npm:bar"}, false},
+		{"only clawhub", []string{"@anthropic/mcp-server-fetch"}, true},
+		{"mixed", []string{"npm:foo", "@anthropic/mcp-server-fetch"}, true},
+		{"only packs", []string{"pack:owner/repo/path"}, true}, // pack: is not npm:, so true
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasClawHubSkills(tt.skills); got != tt.want {
+				t.Errorf("hasClawHubSkills(%v) = %v, want %v", tt.skills, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSkillsScript_WrapperOrdering(t *testing.T) {
+	instance := newTestInstance("ordering")
+	instance.Spec.Skills = []string{"@anthropic/mcp-server-fetch"}
+
+	script := BuildSkillsScript(instance)
+
+	setEIdx := strings.Index(script, "set -e")
+	wrapperIdx := strings.Index(script, "_install_skill()")
+	installIdx := strings.Index(script, "_install_skill '@anthropic/mcp-server-fetch'")
+
+	if setEIdx == -1 || wrapperIdx == -1 || installIdx == -1 {
+		t.Fatalf("missing expected content in script:\n%s", script)
+	}
+	if setEIdx >= wrapperIdx {
+		t.Error("set -e must come before the wrapper function")
+	}
+	if wrapperIdx >= installIdx {
+		t.Error("wrapper function must come before install commands")
 	}
 }
 

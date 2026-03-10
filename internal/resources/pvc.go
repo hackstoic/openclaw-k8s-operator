@@ -18,6 +18,7 @@ package resources
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	openclawv1alpha1 "github.com/openclawrocks/k8s-operator/api/v1alpha1"
