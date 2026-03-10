@@ -28,12 +28,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
-          # Detect if the current push merged a release-please PR
+          # Detect if the current push merged a release-please PR.
+          # Check both the commit message (squash merge) and the merged
+          # PR title (merge commit) to handle all merge strategies.
           COMMIT_MSG=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}" \
             --jq '.commit.message' | head -1)
 
+          VERSION=""
           if [[ "$COMMIT_MSG" =~ ^chore\(main\):\ release\ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
             VERSION="${BASH_REMATCH[1]}"
+          elif [[ "$COMMIT_MSG" =~ ^Merge\ pull\ request\ \#([0-9]+) ]]; then
+            # Merge commit - check the PR title instead
+            PR_NUM="${BASH_REMATCH[1]}"
+            PR_TITLE=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUM}" --jq '.title')
+            if [[ "$PR_TITLE" =~ ^chore\(main\):\ release\ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+            fi
+          fi
+
+          if [[ -n "$VERSION" ]]; then
             TAG="v${VERSION}"
 
             # Only create if tag doesn't already exist
