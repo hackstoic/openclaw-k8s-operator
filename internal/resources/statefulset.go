@@ -1515,6 +1515,10 @@ func buildWebTerminalContainer(instance *openclawv1alpha1.OpenClawInstance) core
 	var flags []string
 	if instance.Spec.WebTerminal.ReadOnly {
 		flags = append(flags, "-R")
+	} else {
+		// ttyd defaults to read-only when --writable/-W is not passed.
+		// Explicitly pass -W so that ReadOnly: false results in an interactive terminal.
+		flags = append(flags, "-W")
 	}
 	if instance.Spec.WebTerminal.Credential != nil {
 		flags = append(flags, `-c "${TTYD_USERNAME}:${TTYD_PASSWORD}"`)

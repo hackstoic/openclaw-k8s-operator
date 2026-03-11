@@ -9045,6 +9045,10 @@ func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
 	if !strings.Contains(wt.Command[2], "exec ttyd") {
 		t.Errorf("web-terminal command should contain 'exec ttyd', got %q", wt.Command[2])
 	}
+	// Default (ReadOnly: false) should include -W flag for writable mode
+	if !strings.Contains(wt.Command[2], "-W") {
+		t.Errorf("web-terminal command should contain '-W' for writable mode by default, got %q", wt.Command[2])
+	}
 
 	// No credential env vars by default
 	if len(wt.Env) != 0 {
@@ -9152,6 +9156,10 @@ func TestBuildStatefulSet_WebTerminalReadOnly(t *testing.T) {
 	// Command should include -R flag
 	if !strings.Contains(wt.Command[2], "-R") {
 		t.Errorf("web-terminal command should contain '-R' for read-only, got %q", wt.Command[2])
+	}
+	// Should NOT include -W flag
+	if strings.Contains(wt.Command[2], "-W") {
+		t.Errorf("web-terminal command should NOT contain '-W' in read-only mode, got %q", wt.Command[2])
 	}
 
 	// Data mount should be read-only
