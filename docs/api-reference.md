@@ -269,13 +269,13 @@ Optional Chromium sidecar for browser automation.
 
 When enabled, the sidecar:
 
-- Exposes Chrome DevTools Protocol on port 3000.
+- Exposes Chrome DevTools Protocol on port 9222.
 - Runs as UID 999 (blessuser).
 - Mounts a memory-backed emptyDir at `/dev/shm` (1Gi) for shared memory.
 - Mounts an emptyDir at `/tmp` for scratch space.
 - When `persistence.enabled` is true, mounts a PVC at `/chromium-data` and passes `--user-data-dir=/chromium-data` to Chrome, persisting cookies, localStorage, IndexedDB, cached credentials, and session tokens across pod restarts.
 
-When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint (`http://localhost:3000`). This ensures browser tool calls work regardless of which profile name the LLM passes.
+When Chromium is enabled, the operator also auto-configures browser profiles in the OpenClaw config. Both `"default"` and `"chrome"` profiles are set to point at the sidecar's CDP endpoint (`http://<name>-cdp.<namespace>.svc:9222`). This ensures browser tool calls work regardless of which profile name the LLM passes.
 
 ### spec.tailscale
 
@@ -393,13 +393,58 @@ spec:
         memory: "128Mi"
 ```
 
+### spec.clawport
+
+Built-in ClawPort dashboard integration.
+
+| Field     | Type    | Default | Description |
+|-----------|---------|---------|-------------|
+| `enabled` | `*bool` | `true`  | Install and run the `clawport-ui@0.8.3` sidecar, expose Service port `3000`, and make the default Ingress backend route to ClawPort. |
+
+When enabled, the operator:
+
+- Installs and builds `clawport-ui@0.8.3` in an operator-managed init container.
+- Starts a `clawport-ui` sidecar from the PVC-backed build output on port `3000`.
+- Reuses the instance gateway token Secret so ClawPort can talk to OpenClaw.
+- Adds a default Service port named `clawport-web` on `3000`.
+- Makes Ingress default to port `3000` unless you explicitly set `paths[].port`.
+
+```yaml
+spec:
+  clawport:
+    enabled: false
+```
+
+### spec.memos
+
+Built-in MemOS memory plugin integration.
+
+| Field     | Type    | Default | Description |
+|-----------|---------|---------|-------------|
+| `enabled` | `*bool` | `true`  | Install and configure `@memtensor/memos-local-openclaw-plugin@1.0.2` for the instance. |
+
+When enabled, the operator:
+
+- Runs `openclaw plugins install @memtensor/memos-local-openclaw-plugin@1.0.2` in an operator-managed init container.
+- Injects these `openclaw.json` defaults only when you have not already set them:
+  - `agents.defaults.memorySearch.enabled=false`
+  - `plugins.slots.memory="memos-local-openclaw-plugin"`
+  - `plugins.entries["memos-local-openclaw-plugin"].enabled=true`
+- Leaves embedding and summarizer selection to the plugin's own local and fallback behavior.
+
+```yaml
+spec:
+  memos:
+    enabled: false
+```
+
 ### spec.initContainers
 
 | Field            | Type            | Default | Description                                                              |
 |------------------|-----------------|---------|--------------------------------------------------------------------------|
 | `initContainers` | `[]Container`   | --      | Additional init containers to run before the main container. They run after the operator-managed init containers. Max 10 items. |
 
-Standard Kubernetes `Container` spec. The following names are reserved by the operator and rejected by the webhook: `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-ollama`.
+Standard Kubernetes `Container` spec. The following names are reserved by the operator and rejected by the webhook: `init-config`, `init-pnpm`, `init-python`, `init-skills`, `init-memos`, `init-clawport`, `init-ollama`.
 
 ```yaml
 spec:
@@ -420,7 +465,7 @@ spec:
 |------------|-----------------|---------|---------------------------------------------------------------------------------------------------|
 | `sidecars` | `[]Container`   | --      | Additional sidecar containers to inject into the pod. Use for custom sidecars like database proxies, log forwarders, or service meshes. |
 
-Standard Kubernetes `Container` spec. Sidecar containers run alongside the main OpenClaw container.
+Standard Kubernetes `Container` spec. Sidecar containers run alongside the main OpenClaw container. The webhook rejects operator-reserved names: `openclaw`, `gateway-proxy`, `clawport-ui`, `web-terminal`, `ollama`.
 
 ```yaml
 spec:
@@ -495,7 +540,7 @@ Network-related configuration for the instance.
 |---------------|-----------------------|--------------|-----------------------------------------------------------|
 | `type`        | `string`              | `ClusterIP`  | Service type. One of: `ClusterIP`, `LoadBalancer`, `NodePort`. |
 | `annotations` | `map[string]string`   | --           | Annotations to add to the Service.                        |
-| `ports`       | `[]ServicePortSpec`   | --           | Custom ports exposed on the Service. When set, replaces the default gateway and canvas ports. |
+| `ports`       | `[]ServicePortSpec`   | --           | Custom ports exposed on the Service. When set, replaces all operator-managed default Service ports. |
 
 **ServicePortSpec:**
 
@@ -510,13 +555,14 @@ When `ports` is not set, the Service exposes these default ports:
 
 | Port Name   | Port   | Target Port | Description                     |
 |-------------|--------|-------------|---------------------------------|
+| `clawport-web` | 3000 | 3000      | ClawPort dashboard sidecar (only when `spec.clawport.enabled=true`, which is the default). |
 | `gateway`   | 18789  | 18790       | OpenClaw WebSocket gateway (via nginx proxy sidecar). |
 | `canvas`    | 18793  | 18794       | OpenClaw Canvas HTTP server (via nginx proxy sidecar). |
 | `chromium`  | 9222   | 9222        | Chrome DevTools Protocol (only if Chromium sidecar is enabled). |
 
 The gateway and canvas ports route through an nginx reverse proxy sidecar because the gateway process binds to loopback (`127.0.0.1`). The proxy listens on dedicated ports (`0.0.0.0`) and forwards traffic to loopback. This avoids CWE-319 plaintext WebSocket security errors on non-loopback addresses.
 
-**Note:** Custom ports fully replace the defaults, including the Chromium port. If you use custom ports and have the Chromium sidecar enabled, include the Chromium port (9222) explicitly.
+**Note:** Custom ports fully replace the defaults, including ClawPort, gateway, canvas, Chromium, web terminal, and metrics ports. If you still need any of those endpoints, include them explicitly in `spec.networking.service.ports`.
 
 **Custom ports example:**
 
@@ -554,7 +600,7 @@ networking:
 |------------|----------|------------|--------------------------------------------------------------------------|
 | `path`     | `string` | `/`        | URL path.                                                                |
 | `pathType` | `string` | `Prefix`   | Path matching. One of: `Prefix`, `Exact`, `ImplementationSpecific`.      |
-| `port`     | `*int32` | `18789`    | Backend service port number. Defaults to the gateway port when not set.  |
+| `port`     | `*int32` | `3000`     | Backend service port number. Defaults to ClawPort Web (`3000`) when `spec.clawport.enabled=true`, otherwise the gateway port (`18789`). When `spec.networking.service.ports` is customized, this field is required on every path. |
 
 **Custom backend port example:**
 
@@ -566,14 +612,16 @@ networking:
     hosts:
       - host: aibot.example.com
         paths:
-          - path: /api/messages
+          - path: /
             pathType: Prefix
-            port: 3978
+            port: 18789
     tls:
       - hosts:
           - aibot.example.com
         secretName: certificate-aibot-tls
 ```
+
+Use `port: 18789` to expose the gateway Control UI directly, or `port: 18793` to expose canvas directly. If you omit `port`, the Ingress sends traffic to ClawPort by default.
 
 **IngressTLS:**
 
@@ -793,7 +841,9 @@ When `existingSecret` is not set, the operator automatically generates a random 
 
 The operator always injects `gateway.controlUi.dangerouslyDisableDeviceAuth: true` into the config JSON. Device pairing (introduced in OpenClaw v2026.3.2) is fundamentally incompatible with Kubernetes because users cannot approve pairing from inside a container, connections always come through the nginx proxy sidecar (non-local), and mDNS is unavailable. If you explicitly set `gateway.controlUi.dangerouslyDisableDeviceAuth` in your config, your value takes precedence. **Do not set `gateway.mode: local`** - this desktop-only mode enforces device identity checks that cannot work behind a reverse proxy.
 
-When accessing the Control UI through an Ingress, authenticate by appending the gateway token to the URL fragment: `https://openclaw.example.com/#token=<your-token>`.
+By default, Ingress traffic routes to ClawPort on port `3000`. To expose the gateway Control UI or canvas through an Ingress instead, set `spec.networking.ingress.hosts[].paths[].port` to `18789` or `18793`.
+
+When accessing the gateway Control UI through an Ingress, authenticate by appending the gateway token to the URL fragment: `https://openclaw.example.com/#token=<your-token>`.
 
 The operator auto-injects `gateway.controlUi.allowedOrigins` into the config JSON with:
 - **Localhost** (always): `http://localhost:18789`, `http://127.0.0.1:18789`

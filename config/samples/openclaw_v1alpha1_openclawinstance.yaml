@@ -10,6 +10,14 @@ spec:
     - secretRef:
         name: openclaw-api-keys  # Create this secret with your API keys
 
+  # Built-in defaults:
+  # - ClawPort dashboard sidecar enabled (Service/Ingress default port 3000)
+  # - MemOS plugin installed and configured
+  # clawport:
+  #   enabled: false
+  # memos:
+  #   enabled: false
+
   # Minimal config - uses defaults for everything else
   storage:
     persistence:

@@ -57,7 +57,11 @@ var knownProviderEnvVars = map[string]bool{
 
 // knownConfigKeys lists known top-level keys in openclaw.json configuration.
 var knownConfigKeys = map[string]bool{
+	"agents":             true,
+	"browser":            true,
+	"gateway":            true,
 	"mcpServers":         true,
+	"plugins":            true,
 	"skills":             true,
 	"apiKeys":            true,
 	"settings":           true,
@@ -247,6 +251,16 @@ func (v *OpenClawInstanceValidator) validate(instance *openclawv1alpha1.OpenClaw
 
 	// 19. Validate custom init container names
 	if err := validateInitContainers(instance.Spec.InitContainers); err != nil {
+		return nil, err
+	}
+
+	// 20. Validate custom sidecar names
+	if err := validateSidecars(instance.Spec.Sidecars); err != nil {
+		return nil, err
+	}
+
+	// 21. Validate ingress paths when custom service ports are in use.
+	if err := validateIngressServicePortReferences(instance); err != nil {
 		return nil, err
 	}
 
@@ -508,7 +522,7 @@ func validateConfigSchema(instance *openclawv1alpha1.OpenClawInstance) admission
 	var warnings admission.Warnings
 	for key := range topLevel {
 		if !knownConfigKeys[key] {
-			warnings = append(warnings, fmt.Sprintf("Unknown config key %q in spec.config.raw — known keys are: mcpServers, skills, apiKeys, settings, tools, customInstructions", key))
+			warnings = append(warnings, fmt.Sprintf("Unknown config key %q in spec.config.raw — known keys are: agents, apiKeys, browser, customInstructions, gateway, mcpServers, plugins, settings, skills, tools", key))
 		}
 	}
 	return warnings
@@ -516,11 +530,21 @@ func validateConfigSchema(instance *openclawv1alpha1.OpenClawInstance) admission
 
 // reservedInitContainerNames are names used by operator-managed init containers.
 var reservedInitContainerNames = map[string]bool{
-	"init-config": true,
-	"init-pnpm":   true,
-	"init-python": true,
-	"init-skills": true,
-	"init-ollama": true,
+	"init-config":   true,
+	"init-pnpm":     true,
+	"init-python":   true,
+	"init-skills":   true,
+	"init-memos":    true,
+	"init-clawport": true,
+	"init-ollama":   true,
+}
+
+var reservedSidecarNames = map[string]bool{
+	"openclaw":      true,
+	"gateway-proxy": true,
+	"clawport-ui":   true,
+	"web-terminal":  true,
+	"ollama":        true,
 }
 
 // validateInitContainers checks custom init container names.
@@ -534,6 +558,42 @@ func validateInitContainers(containers []corev1.Container) error {
 			return fmt.Errorf("initContainers[%d]: name %q is reserved for operator-managed init containers", i, name)
 		}
 	}
+	return nil
+}
+
+// validateSidecars checks custom sidecar names against operator-managed containers.
+func validateSidecars(containers []corev1.Container) error {
+	for i := range containers {
+		name := containers[i].Name
+		if name == "" {
+			return fmt.Errorf("sidecars[%d]: container name must not be empty", i)
+		}
+		if reservedSidecarNames[name] {
+			return fmt.Errorf("sidecars[%d]: name %q is reserved for operator-managed containers", i, name)
+		}
+	}
+	return nil
+}
+
+// validateIngressServicePortReferences requires explicit ingress path ports when
+// custom Service ports are configured. Without this the default backend port may
+// not exist on the user-managed Service port list.
+func validateIngressServicePortReferences(instance *openclawv1alpha1.OpenClawInstance) error {
+	if !instance.Spec.Networking.Ingress.Enabled || len(instance.Spec.Networking.Service.Ports) == 0 {
+		return nil
+	}
+
+	for i, host := range instance.Spec.Networking.Ingress.Hosts {
+		if len(host.Paths) == 0 {
+			return fmt.Errorf("networking.ingress.hosts[%d]: paths[].port must be set when networking.service.ports is customized", i)
+		}
+		for j, path := range host.Paths {
+			if path.Port == nil {
+				return fmt.Errorf("networking.ingress.hosts[%d].paths[%d]: port must be set when networking.service.ports is customized", i, j)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -608,6 +668,12 @@ func (d *OpenClawInstanceDefaulter) Default(ctx context.Context, obj runtime.Obj
 	// Default networking
 	if instance.Spec.Networking.Service.Type == "" {
 		instance.Spec.Networking.Service.Type = corev1.ServiceTypeClusterIP
+	}
+	if instance.Spec.ClawPort.Enabled == nil {
+		instance.Spec.ClawPort.Enabled = boolPtr(true)
+	}
+	if instance.Spec.MemOS.Enabled == nil {
+		instance.Spec.MemOS.Enabled = boolPtr(true)
 	}
 
 	// Default auto-update settings

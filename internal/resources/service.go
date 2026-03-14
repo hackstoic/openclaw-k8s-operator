@@ -90,6 +90,15 @@ func buildServicePorts(instance *openclawv1alpha1.OpenClawInstance) []corev1.Ser
 		},
 	}
 
+	if IsClawPortEnabled(instance) {
+		ports = append(ports, corev1.ServicePort{
+			Name:       "clawport-web",
+			Port:       int32(ClawPortWebPort),
+			TargetPort: intstr.FromInt32(int32(ClawPortWebPort)),
+			Protocol:   corev1.ProtocolTCP,
+		})
+	}
+
 	if instance.Spec.Chromium.Enabled {
 		ports = append(ports, corev1.ServicePort{
 			Name:       "chromium",

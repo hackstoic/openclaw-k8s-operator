@@ -70,6 +70,41 @@ const (
 	// WebTerminalPort is the port for the ttyd web terminal
 	WebTerminalPort = 7681
 
+	// ClawPortWebPort is the port served by the ClawPort UI sidecar.
+	ClawPortWebPort = 3000
+
+	// ClawPortPackageName is the npm package installed for the built-in dashboard.
+	ClawPortPackageName = "clawport-ui"
+
+	// ClawPortPackageVersion is the pinned npm package version used for the built-in dashboard.
+	ClawPortPackageVersion = "0.8.3"
+
+	// ClawPortBuildMarkerVersion tracks operator-managed source patches so cached
+	// PVC installs are rebuilt when the runtime contract changes.
+	ClawPortBuildMarkerVersion = ClawPortPackageVersion + "-operator-6"
+
+	// ClawPortInstallDir is the PVC-backed install directory for the ClawPort UI package.
+	ClawPortInstallDir = "/home/openclaw/.openclaw/clawport-ui"
+
+	// ClawPortVersionMarker is written after a successful ClawPort install/build.
+	ClawPortVersionMarker = ClawPortInstallDir + "/.operator-version"
+
+	// MemOSPackageName is the npm package installed for the built-in memory plugin.
+	MemOSPackageName = "@memtensor/memos-local-openclaw-plugin"
+
+	// MemOSPackageVersion is the pinned npm package version used for the built-in memory plugin.
+	MemOSPackageVersion = "1.0.2"
+
+	// MemOSPluginID is the OpenClaw plugin identifier for the built-in MemOS integration.
+	MemOSPluginID = "memos-local-openclaw-plugin"
+
+	// MemOSInstallMarkerVersion tracks operator-managed install steps so cached
+	// PVC installs are repaired when the native binding bootstrap flow changes.
+	MemOSInstallMarkerVersion = MemOSPackageVersion + "-operator-1"
+
+	// MemOSVersionMarker is written after a successful MemOS install.
+	MemOSVersionMarker = "/home/openclaw/.openclaw/extensions/" + MemOSPluginID + "/.operator-version"
+
 	// ConfigMergeModeMerge is the merge mode that deep-merges config with existing PVC config
 	ConfigMergeModeMerge = "merge"
 
@@ -248,6 +283,16 @@ func GatewayTokenSecretName(instance *openclawv1alpha1.OpenClawInstance) string 
 // BasicAuthSecretName returns the name of the auto-generated Ingress Basic Auth Secret
 func BasicAuthSecretName(instance *openclawv1alpha1.OpenClawInstance) string {
 	return instance.Name + "-basic-auth"
+}
+
+// IsClawPortEnabled returns true when the built-in ClawPort integration is enabled.
+func IsClawPortEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+	return instance.Spec.ClawPort.Enabled == nil || *instance.Spec.ClawPort.Enabled
+}
+
+// IsMemOSEnabled returns true when the built-in MemOS integration is enabled.
+func IsMemOSEnabled(instance *openclawv1alpha1.OpenClawInstance) bool {
+	return instance.Spec.MemOS.Enabled == nil || *instance.Spec.MemOS.Enabled
 }
 
 // TailscaleStateSecretName returns the name of the Tailscale state Secret

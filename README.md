@@ -75,6 +75,8 @@ Every request is validated against the instance's allowlist policy. Protected co
 | **Config Modes** | Merge or overwrite | `overwrite` replaces config on restart; `merge` deep-merges with PVC config, preserving runtime changes. Config is restored on every container restart via init container. |
 | **Skills** | Declarative install | Install ClawHub skills, npm packages, or GitHub-hosted skill packs via `spec.skills` - supports `npm:` and `pack:` prefixes |
 | **Runtime Deps** | pnpm & Python/uv | Built-in init containers install pnpm (via corepack) or Python 3.12 + uv for MCP servers and skills |
+| **Built-in UI** | ClawPort dashboard | Each instance installs `clawport-ui@0.8.3` as a sidecar on port `3000`; the default Ingress backend routes to it |
+| **Built-in Memory** | MemOS plugin | Each instance installs `@memtensor/memos-local-openclaw-plugin@1.0.2` and injects the required config defaults while preserving user overrides |
 | **Auto-Update** | OCI registry polling | Opt-in version tracking: checks the registry for new semver releases, backs up first, rolls out, and auto-rolls back if the new version fails health checks |
 | **Scalable** | Auto-scaling | HPA integration with CPU and memory metrics, min/max replica bounds, automatic StatefulSet replica management |
 | **Resilient** | Self-healing lifecycle | PodDisruptionBudgets, health probes, automatic config rollouts via content hashing, 5-minute drift detection |
@@ -114,15 +116,16 @@ Every request is validated against the instance's allowlist policy. Protected co
 |                                                                 |
 |  StatefulSet                                                    |
 |  +-----------------------------------------------------------+ |
-|  | Init: config -> pnpm* -> python* -> skills* -> custom      | |
+|  | Init: config -> runtime deps* -> skills* -> memos*         | |
+|  |        -> clawport* -> custom                              | |
 |  |                                        (* = opt-in)        | |
 |  +------------------------------------------------------------+ |
-|  | OpenClaw Container  Gateway Proxy (nginx)                  | |
+|  | OpenClaw Container  Gateway Proxy (nginx)  ClawPort UI     | |
 |  |                     Chromium (opt) / Ollama (opt)          | |
 |  |                     Tailscale (opt) + custom sidecars      | |
 |  +------------------------------------------------------------+ |
 |                                                                 |
-|  Service (default: 18789, 18793 or custom) -> Ingress (opt)     |
+|  Service (default: 3000, 18789, 18793 or custom) -> Ingress     |
 +-----------------------------------------------------------------+
 ```
 
@@ -238,7 +241,9 @@ The operator automatically generates a gateway token Secret for each instance an
 - To bring your own token Secret, set `spec.gateway.existingSecret` - the operator will use it instead of auto-generating one (the Secret must have a key named `token`)
 - The operator automatically sets `gateway.controlUi.dangerouslyDisableDeviceAuth: true` - device pairing is incompatible with Kubernetes (users cannot approve pairing from inside a container, connections are always proxied, and mDNS is unavailable)
 - **Do not set `gateway.mode: local`** in your config - this mode is for desktop installs and enforces device identity checks that cannot work behind a reverse proxy in Kubernetes
-- When connecting to the Control UI through an Ingress, pass the gateway token in the URL fragment: `https://openclaw.example.com/#token=<your-token>`
+- The default Ingress backend now points to ClawPort on port `3000`, not the gateway Control UI
+- To expose the gateway Control UI or canvas directly through an Ingress, set `spec.networking.ingress.hosts[].paths[].port` to `18789` or `18793`
+- When connecting to the gateway Control UI through an Ingress, pass the gateway token in the URL fragment: `https://openclaw.example.com/#token=<your-token>`
 - Since v2026.2.24, OpenClaw restricts `gateway.allowedOrigins` to same-origin by default - if accessing via a non-default hostname (e.g. Ingress), set `gateway.allowedOrigins: ["*"]` in your config
 
 ### Control UI allowed origins
@@ -250,6 +255,26 @@ The operator auto-injects `gateway.controlUi.allowedOrigins` so the Control UI w
 - **Explicit extras**: `spec.gateway.controlUiOrigins` for custom proxy URLs
 
 If you set `gateway.controlUi.allowedOrigins` directly in your config JSON, the operator will not override it.
+
+### ClawPort and MemOS defaults
+
+Every instance enables two built-in integrations by default:
+
+- `spec.clawport.enabled: true` installs `clawport-ui@0.8.3`, builds it in an init container, exposes it on Service port `3000`, and routes the default Ingress backend to it
+- `spec.memos.enabled: true` installs `@memtensor/memos-local-openclaw-plugin@1.0.2` and injects these config defaults only when you have not already set them yourself:
+  - `agents.defaults.memorySearch.enabled=false`
+  - `plugins.slots.memory="memos-local-openclaw-plugin"`
+  - `plugins.entries["memos-local-openclaw-plugin"].enabled=true`
+
+Disable either integration per instance if you want the old behavior:
+
+```yaml
+spec:
+  clawport:
+    enabled: false
+  memos:
+    enabled: false
+```
 
 ### Chromium sidecar
 
@@ -603,7 +628,7 @@ For Traefik ingress, a `Middleware` CRD resource is created automatically (requi
 
 ### Custom service ports
 
-By default the operator creates a Service with the gateway (18789) and canvas (18793) ports. To expose custom ports instead (e.g., for a non-default application), set `spec.networking.service.ports`:
+By default the operator creates a Service with ClawPort Web (`3000`), gateway (`18789`), and canvas (`18793`) ports. To expose custom ports instead (e.g., for a non-default application), set `spec.networking.service.ports`:
 
 ```yaml
 spec:
@@ -616,7 +641,7 @@ spec:
           targetPort: 3978
 ```
 
-When `ports` is set, it fully replaces the default ports -- including the Chromium port if the sidecar is enabled. To keep the defaults alongside custom ports, include them explicitly. If `targetPort` is omitted it defaults to `port`. See the [API reference](docs/api-reference.md#specnetworkingservice) for all fields.
+When `ports` is set, it fully replaces the default ports -- including ClawPort, gateway, canvas, and any optional sidecar ports. To keep defaults alongside custom ports, include them explicitly. If you also enable Ingress while using custom Service ports, every `paths[]` entry must set `port`. If `targetPort` is omitted it defaults to `port`. See the [API reference](docs/api-reference.md#specnetworkingservice) for all fields.
 
 ### CA bundle injection
 
@@ -731,8 +756,10 @@ These behaviors are always applied - no configuration needed:
 | Behavior | Details |
 |----------|---------|
 | `gateway.bind=loopback` | Always injected into config; an nginx reverse proxy sidecar exposes the gateway and canvas ports for external access |
+| ClawPort dashboard | Enabled by default; installs `clawport-ui@0.8.3`, exposes Service port `3000`, and becomes the default Ingress backend |
 | Gateway auth token | Auto-generated Secret per instance; injected into config and env |
 | Control UI origins | `gateway.controlUi.allowedOrigins` auto-injected from localhost + ingress hosts + `spec.gateway.controlUiOrigins` |
+| MemOS defaults | Enabled by default; installs `@memtensor/memos-local-openclaw-plugin@1.0.2` and injects memory plugin defaults without overwriting user config |
 | `OPENCLAW_DISABLE_BONJOUR=1` | Always set (mDNS does not work in Kubernetes) |
 | Browser profiles | When Chromium is enabled, `"default"` and `"chrome"` profiles are auto-configured with the sidecar's CDP endpoint |
 | Tailscale serve config | When Tailscale is enabled, a `tailscale-serve.json` key is added to the ConfigMap for the sidecar's `TS_SERVE_CONFIG` |

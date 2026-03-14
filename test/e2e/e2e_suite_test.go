@@ -170,8 +170,8 @@ var _ = Describe("OpenClawInstance Controller", func() {
 				}, service)
 			}, timeout, interval).Should(Succeed())
 
-			// Verify the StatefulSet has main + gateway-proxy containers
-			Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(2))
+			// Verify the StatefulSet has main + gateway-proxy + clawport-ui containers
+			Expect(statefulSet.Spec.Template.Spec.Containers).To(HaveLen(3))
 			Expect(statefulSet.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/openclaw/openclaw:latest"))
 
 			// Clean up
@@ -267,6 +267,176 @@ var _ = Describe("OpenClawInstance Controller", func() {
 
 			Expect(configMap.Data).To(HaveKey(resources.NginxConfigKey),
 				"ConfigMap should contain nginx.conf key")
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should install default ClawPort and MemOS integrations", func() {
+			instanceName := "clawport-defaults"
+			className := "nginx"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					Networking: openclawv1alpha1.NetworkingSpec{
+						Ingress: openclawv1alpha1.IngressSpec{
+							Enabled:   true,
+							ClassName: &className,
+							Hosts: []openclawv1alpha1.IngressHost{
+								{Host: "portal.example.com"},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			containerNames := map[string]bool{}
+			for _, c := range statefulSet.Spec.Template.Spec.Containers {
+				containerNames[c.Name] = true
+			}
+			Expect(containerNames["clawport-ui"]).To(BeTrue(), "StatefulSet should include the ClawPort sidecar")
+
+			initNames := map[string]bool{}
+			for _, c := range statefulSet.Spec.Template.Spec.InitContainers {
+				initNames[c.Name] = true
+			}
+			Expect(initNames["init-clawport"]).To(BeTrue(), "StatefulSet should include init-clawport")
+			Expect(initNames["init-memos"]).To(BeTrue(), "StatefulSet should include init-memos")
+
+			service := &corev1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, service)
+			}, timeout, interval).Should(Succeed())
+
+			foundClawPortWeb := false
+			for _, port := range service.Spec.Ports {
+				if port.Name == "clawport-web" && port.Port == int32(resources.ClawPortWebPort) {
+					foundClawPortWeb = true
+				}
+			}
+			Expect(foundClawPortWeb).To(BeTrue(), "Service should expose the ClawPort web port")
+
+			ingress := &networkingv1.Ingress{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, ingress)
+			}, timeout, interval).Should(Succeed())
+
+			Expect(ingress.Spec.Rules).To(HaveLen(1))
+			Expect(ingress.Spec.Rules[0].HTTP.Paths).To(HaveLen(1))
+			Expect(ingress.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Port.Number).To(Equal(int32(resources.ClawPortWebPort)))
+
+			configMap := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: resources.ConfigMapName(instance), Namespace: namespace}, configMap)
+			}, timeout, interval).Should(Succeed())
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configMap.Data["openclaw.json"]), &parsed)).To(Succeed())
+			plugins := parsed["plugins"].(map[string]interface{})
+			slots := plugins["slots"].(map[string]interface{})
+			Expect(slots["memory"]).To(Equal(resources.MemOSPluginID))
+
+			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
+		})
+
+		It("Should respect ClawPort and MemOS opt-outs", func() {
+			instanceName := "clawport-optout"
+			className := "nginx"
+
+			if os.Getenv("E2E_SKIP_RESOURCE_VALIDATION") == "true" {
+				Skip("Skipping resource validation in minimal mode")
+			}
+
+			instance := &openclawv1alpha1.OpenClawInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"openclaw.rocks/skip-backup": "true",
+					},
+				},
+				Spec: openclawv1alpha1.OpenClawInstanceSpec{
+					Image: openclawv1alpha1.ImageSpec{
+						Repository: "ghcr.io/openclaw/openclaw",
+						Tag:        "latest",
+					},
+					ClawPort: openclawv1alpha1.ClawPortSpec{
+						Enabled: resources.Ptr(false),
+					},
+					MemOS: openclawv1alpha1.MemOSSpec{
+						Enabled: resources.Ptr(false),
+					},
+					Networking: openclawv1alpha1.NetworkingSpec{
+						Ingress: openclawv1alpha1.IngressSpec{
+							Enabled:   true,
+							ClassName: &className,
+							Hosts: []openclawv1alpha1.IngressHost{
+								{Host: "gateway.example.com"},
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+
+			statefulSet := &appsv1.StatefulSet{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, statefulSet)
+			}, timeout, interval).Should(Succeed())
+
+			for _, c := range statefulSet.Spec.Template.Spec.Containers {
+				Expect(c.Name).NotTo(Equal("clawport-ui"))
+			}
+			for _, c := range statefulSet.Spec.Template.Spec.InitContainers {
+				Expect(c.Name).NotTo(Equal("init-clawport"))
+				Expect(c.Name).NotTo(Equal("init-memos"))
+			}
+
+			service := &corev1.Service{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, service)
+			}, timeout, interval).Should(Succeed())
+			for _, port := range service.Spec.Ports {
+				Expect(port.Name).NotTo(Equal("clawport-web"))
+			}
+
+			ingress := &networkingv1.Ingress{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: namespace}, ingress)
+			}, timeout, interval).Should(Succeed())
+			Expect(ingress.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Port.Number).To(Equal(int32(resources.GatewayPort)))
+
+			configMap := &corev1.ConfigMap{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: resources.ConfigMapName(instance), Namespace: namespace}, configMap)
+			}, timeout, interval).Should(Succeed())
+
+			var parsed map[string]interface{}
+			Expect(json.Unmarshal([]byte(configMap.Data["openclaw.json"]), &parsed)).To(Succeed())
+			_, hasPlugins := parsed["plugins"]
+			Expect(hasPlugins).To(BeFalse(), "MemOS opt-out should skip plugin config injection")
 
 			Expect(k8sClient.Delete(ctx, instance)).Should(Succeed())
 		})

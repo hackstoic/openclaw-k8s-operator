@@ -54,6 +54,12 @@ spec:
     - name: OPENCLAW_DISABLE_BONJOUR
       value: "1"
 
+  # Built-in dashboard + memory integrations
+  clawport:
+    enabled: true
+  memos:
+    enabled: true
+
   # Resource requirements
   resources:
     requests:
@@ -156,6 +162,8 @@ spec:
           paths:
             - path: /
               pathType: Prefix
+              # Default Ingress backend is ClawPort Web on port 3000.
+              # Set port: 18789 for the gateway Control UI or port: 18793 for canvas.
       tls:
         - secretName: openclaw-tls
           hosts:

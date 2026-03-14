@@ -43,3 +43,7 @@ charts/**/*.tgz
 
 # Build artifacts
 dist/
+
+# Example secrets
+xai-provider-keys.yaml
+xai-provider-keys-for-local-kind.yaml

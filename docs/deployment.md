@@ -211,6 +211,12 @@ spec:
               pathType: Prefix
 ```
 
+This ALB Ingress targets ClawPort Web on port `3000` by default. To send ALB traffic to the gateway Control UI or canvas instead, set `paths[].port` to `18789` or `18793`.
+
+For a concrete EKS recipe that disables ClawPort and exposes the OpenClaw
+gateway dashboard at the public domain, see
+`/Users/root1/AI/openclaw-k8s-operator/deploy/eks/README.md`.
+
 ### 6. Verify
 
 ```bash
@@ -327,6 +333,8 @@ spec:
       allowedIngressNamespaces:
         - ingress-nginx
 ```
+
+Like all default Ingresses, this routes `/` to ClawPort Web on port `3000`. Set `paths[].port: 18789` for the gateway Control UI or `paths[].port: 18793` for canvas.
 
 ### 6. Verify
 
@@ -537,9 +545,13 @@ kubectl get deploy,svc,sa,role,rolebinding,networkpolicy,pdb -n openclaw \
 
 # 5. Pod is healthy
 kubectl get pods -n openclaw -l app.kubernetes.io/name=openclaw
-# Expected: 1/1 Running (or 2/2 with Chromium sidecar)
+# Expected: Ready count reflects the main container plus enabled sidecars (default is 3/3: openclaw, gateway-proxy, clawport-ui)
 
-# 6. Gateway is reachable (from within the cluster)
+# 6. Default web entry is reachable (from within the cluster)
+kubectl run -n openclaw test-curl --rm -it --image=curlimages/curl -- \
+  curl -s -o /dev/null -w '%{http_code}' http://my-assistant:3000
+
+# Optional: verify the gateway Control UI directly
 kubectl run -n openclaw test-curl --rm -it --image=curlimages/curl -- \
   curl -s -o /dev/null -w '%{http_code}' http://my-assistant:18789
 ```

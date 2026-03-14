@@ -1575,3 +1575,87 @@ func TestValidateCreate_NoWarnWebTerminalDisabled(t *testing.T) {
 		t.Fatalf("expected no web terminal warning when disabled, got: %v", warnings)
 	}
 }
+
+func TestValidateCreate_RejectsReservedInitClawPortName(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.InitContainers = []corev1.Container{{Name: "init-clawport"}}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("expected reserved-name error for init-clawport, got: %v", err)
+	}
+}
+
+func TestValidateCreate_RejectsReservedInitMemOSName(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.InitContainers = []corev1.Container{{Name: "init-memos"}}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("expected reserved-name error for init-memos, got: %v", err)
+	}
+}
+
+func TestValidateCreate_RejectsReservedSidecarName(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Sidecars = []corev1.Container{{Name: "clawport-ui"}}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("expected reserved-name error for clawport-ui sidecar, got: %v", err)
+	}
+}
+
+func TestValidateCreate_CustomServicePortsRequireIngressPathPort(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Networking.Service.Ports = []openclawv1alpha1.ServicePortSpec{
+		{Name: "http", Port: 8080},
+	}
+	instance.Spec.Networking.Ingress.Enabled = true
+	instance.Spec.Networking.Ingress.Hosts = []openclawv1alpha1.IngressHost{
+		{Host: "test.example.com", Paths: []openclawv1alpha1.IngressPath{{Path: "/"}}},
+	}
+
+	_, err := v.ValidateCreate(context.Background(), instance)
+	if err == nil || !strings.Contains(err.Error(), "port must be set") {
+		t.Fatalf("expected explicit ingress port validation error, got: %v", err)
+	}
+}
+
+func TestDefault_SetsClawPortAndMemOSEnabled(t *testing.T) {
+	d := &OpenClawInstanceDefaulter{}
+	instance := newTestInstance()
+
+	if err := d.Default(context.Background(), instance); err != nil {
+		t.Fatalf("defaulting returned error: %v", err)
+	}
+	if instance.Spec.ClawPort.Enabled == nil || !*instance.Spec.ClawPort.Enabled {
+		t.Fatal("clawport.enabled should default to true")
+	}
+	if instance.Spec.MemOS.Enabled == nil || !*instance.Spec.MemOS.Enabled {
+		t.Fatal("memos.enabled should default to true")
+	}
+}
+
+func TestValidateCreate_AllowsKnownPluginConfigKeys(t *testing.T) {
+	v := &OpenClawInstanceValidator{}
+	instance := newTestInstance()
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: k8sruntime.RawExtension{Raw: []byte(`{
+			"agents":{"defaults":{"memorySearch":{"enabled":false}}},
+			"plugins":{"slots":{"memory":"memos-local-openclaw-plugin"}}
+		}`)},
+	}
+
+	warnings, err := v.ValidateCreate(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if containsWarning(warnings, "Unknown config key") {
+		t.Fatalf("expected plugin/agent config keys to be accepted, got warnings: %v", warnings)
+	}
+}

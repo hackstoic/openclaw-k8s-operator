@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: xai-provider-keys
+  namespace: openclaw
+type: Opaque
+stringData:
+  # Native xAI provider auth used by models.providers.xai.apiKey.
+  XAI_API_KEY: "xai-your-api-key-here"
+  # Keep this for OpenAI-compatible integrations and debugging workflows.
+  OPENAI_API_KEY: "xai-your-api-key-here"
+  OPENAI_BASE_URL: "https://api.x.ai/v1"

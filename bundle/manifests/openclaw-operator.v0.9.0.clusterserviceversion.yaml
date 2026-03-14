@@ -252,6 +252,16 @@ spec:
             description: Enable Chromium browser automation sidecar
             x-descriptors:
               - "urn:alm:descriptor:com.tectonic.ui:booleanSwitch"
+          - path: clawport.enabled
+            displayName: ClawPort Dashboard
+            description: Enable the built-in ClawPort dashboard sidecar and default Ingress backend
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:booleanSwitch"
+          - path: memos.enabled
+            displayName: MemOS Plugin
+            description: Enable the built-in MemOS memory plugin install and config injection
+            x-descriptors:
+              - "urn:alm:descriptor:com.tectonic.ui:booleanSwitch"
           - path: security.networkPolicy.enabled
             displayName: Network Policy
             description: Enable default-deny NetworkPolicy

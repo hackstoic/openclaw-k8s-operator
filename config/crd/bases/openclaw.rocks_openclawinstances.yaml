@@ -1548,6 +1548,18 @@ spec:
                         type: object
                     type: object
                 type: object
+              clawport:
+                description: |-
+                  ClawPort enables the built-in ClawPort dashboard sidecar.
+                  When enabled, the operator installs the ClawPort UI package at pod startup,
+                  exposes it on the default Service, and routes the default Ingress backend to it.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enabled installs and runs the ClawPort UI sidecar
+                      for this instance.
+                    type: boolean
+                type: object
               config:
                 description: Config specifies the OpenClaw configuration
                 properties:
@@ -5076,6 +5088,18 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
+              memos:
+                description: |-
+                  MemOS enables the built-in MemOS memory plugin installation and config injection.
+                  When enabled, the operator installs the plugin into the instance and injects
+                  the required openclaw.json defaults while preserving user overrides.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enabled installs and configures the MemOS plugin
+                      for this instance.
+                    type: boolean
+                type: object
               networking:
                 description: Networking specifies network-related configuration
                 properties:

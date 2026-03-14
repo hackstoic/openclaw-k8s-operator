@@ -76,6 +76,18 @@ type OpenClawInstanceSpec struct {
 	// +optional
 	WebTerminal WebTerminalSpec `json:"webTerminal,omitempty"`
 
+	// ClawPort enables the built-in ClawPort dashboard sidecar.
+	// When enabled, the operator installs the ClawPort UI package at pod startup,
+	// exposes it on the default Service, and routes the default Ingress backend to it.
+	// +optional
+	ClawPort ClawPortSpec `json:"clawport,omitempty"`
+
+	// MemOS enables the built-in MemOS memory plugin installation and config injection.
+	// When enabled, the operator installs the plugin into the instance and injects
+	// the required openclaw.json defaults while preserving user overrides.
+	// +optional
+	MemOS MemOSSpec `json:"memos,omitempty"`
+
 	// InitContainers is a list of additional init containers to run before the main container.
 	// They run after the operator-managed init-config and init-skills containers.
 	// +kubebuilder:validation:MaxItems=10
@@ -763,6 +775,22 @@ type WebTerminalImageSpec struct {
 type WebTerminalCredentialSpec struct {
 	// SecretRef references a Secret containing "username" and "password" keys
 	SecretRef corev1.LocalObjectReference `json:"secretRef"`
+}
+
+// ClawPortSpec defines the built-in ClawPort dashboard integration.
+type ClawPortSpec struct {
+	// Enabled installs and runs the ClawPort UI sidecar for this instance.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// MemOSSpec defines the built-in MemOS memory plugin integration.
+type MemOSSpec struct {
+	// Enabled installs and configures the MemOS plugin for this instance.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // NetworkingSpec defines network-related configuration

@@ -197,6 +197,9 @@ func buildIngressRulesFromSpec(instance *openclawv1alpha1.OpenClawInstance) []ne
 			}
 
 			backendPort := int32(GatewayPort)
+			if IsClawPortEnabled(instance) {
+				backendPort = int32(ClawPortWebPort)
+			}
 			if p.Port != nil {
 				backendPort = *p.Port
 			}

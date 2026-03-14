@@ -205,6 +205,10 @@ func buildContainers(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSe
 		buildGatewayProxyContainer(instance),
 	}
 
+	if IsClawPortEnabled(instance) {
+		containers = append(containers, buildClawPortContainer(instance, gatewayTokenSecretName))
+	}
+
 	// Add Tailscale sidecar if enabled
 	if instance.Spec.Tailscale.Enabled {
 		containers = append(containers, buildTailscaleContainer(instance))
@@ -573,6 +577,14 @@ func buildInitContainers(instance *openclawv1alpha1.OpenClawInstance, skillPacks
 		initContainers = append(initContainers, *skillsContainer)
 	}
 
+	if IsMemOSEnabled(instance) {
+		initContainers = append(initContainers, buildMemOSInitContainer(instance))
+	}
+
+	if IsClawPortEnabled(instance) {
+		initContainers = append(initContainers, buildClawPortInitContainer(instance))
+	}
+
 	// Ollama model-pulling init container (only if enabled and models are specified)
 	if instance.Spec.Ollama.Enabled && len(instance.Spec.Ollama.Models) > 0 {
 		initContainers = append(initContainers, buildOllamaModelPullInitContainer(instance))
@@ -883,6 +895,548 @@ func buildSkillsInitContainer(instance *openclawv1alpha1.OpenClawInstance) *core
 			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+		VolumeMounts: mounts,
+	}
+}
+
+// buildMemOSInitContainer installs the pinned MemOS plugin into the PVC-backed
+// OpenClaw home directory. The install is version-gated via a marker file so
+// restarts skip the network work once the requested version is present.
+func buildMemOSInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	script := fmt.Sprintf(`set -e
+	PLUGIN_DIR=%s
+	MARKER=%s
+	VERSION=%s
+	CONFIG_PATH=%s
+	TMP_CONFIG=/tmp/openclaw.json.operator-install
+	if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$VERSION" ]; then
+	  echo "MemOS $VERSION already installed"
+	  exit 0
+	fi
+	restore_config() {
+	  if [ -f "$TMP_CONFIG" ]; then
+	    mv "$TMP_CONFIG" "$CONFIG_PATH"
+	  fi
+	}
+	trap restore_config EXIT
+	if [ -f "$CONFIG_PATH" ]; then
+	  mv "$CONFIG_PATH" "$TMP_CONFIG"
+	fi
+	rm -rf "$PLUGIN_DIR"
+	openclaw plugins install %s
+	cd "$PLUGIN_DIR"
+	npm rebuild better-sqlite3 --foreground-scripts
+	node -e "const Database=require('./node_modules/better-sqlite3'); const db=new Database(':memory:'); db.prepare('select 1 as ok').get(); db.close(); console.log('better-sqlite3 ok')"
+	mkdir -p "$(dirname "$MARKER")"
+	printf '%%s' "$VERSION" > "$MARKER"
+	restore_config
+	trap - EXIT`,
+		shellQuote("/home/openclaw/.openclaw/extensions/"+MemOSPluginID),
+		shellQuote(MemOSVersionMarker),
+		shellQuote(MemOSInstallMarkerVersion),
+		shellQuote("/home/openclaw/.openclaw/openclaw.json"),
+		shellQuote(MemOSPackageName+"@"+MemOSPackageVersion),
+	)
+
+	mounts := []corev1.VolumeMount{
+		{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+		{Name: "memos-tmp", MountPath: "/tmp"},
+		{Name: "memos-cache", MountPath: "/npm-cache"},
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: "/home/openclaw"},
+		{Name: "NPM_CONFIG_CACHE", Value: "/npm-cache"},
+		{Name: "XDG_CACHE_HOME", Value: "/tmp/.cache"},
+	}
+
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_EXTRA_CA_CERTS",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
+	return corev1.Container{
+		Name:                     "init-memos",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		Env:                      env,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: mounts,
+	}
+}
+
+// buildClawPortInitContainer installs and builds the pinned ClawPort UI package
+// into a PVC-backed directory so the runtime sidecar only needs to start the
+// already-built Next.js server.
+func buildClawPortInitContainer(instance *openclawv1alpha1.OpenClawInstance) corev1.Container {
+	script := fmt.Sprintf(`set -e
+	INSTALL_DIR=%s
+	MARKER=%s
+	VERSION=%s
+	if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$VERSION" ] && [ -d "$INSTALL_DIR/.next" ]; then
+	  echo "ClawPort $VERSION already built"
+	  exit 0
+	fi
+	rm -rf "$INSTALL_DIR"
+	mkdir -p "$INSTALL_DIR"
+	cd "$INSTALL_DIR"
+	TARBALL=$(npm pack %s)
+	tar -xzf "$TARBALL" --strip-components=1
+	rm -f "$TARBALL"
+	npm install
+	cat <<'EOF' > "$INSTALL_DIR/lib/openclaw-gateway.ts"
+import { randomUUID } from 'crypto'
+import { requireEnv } from '@/lib/env'
+
+type GatewayScope = 'operator.read' | 'operator.write' | 'operator.admin'
+
+interface GatewayResponse<T> {
+  type: 'res'
+  id: string
+  ok: boolean
+  payload?: T
+  error?: { message?: string }
+}
+
+function gatewayUrl(port: string): string {
+  return 'ws://127.0.0.1:' + port
+}
+
+function gatewayOrigin(port: string): string {
+  return 'http://127.0.0.1:' + port
+}
+
+export async function callOpenClawControlUIMethod<T>(
+  method: string,
+  params: unknown,
+  options: { scope: GatewayScope; timeoutMs?: number }
+): Promise<T> {
+  const wsModulePath = '/app/node_modules/ws/index.js'
+  const { default: WebSocket } = await import(/* webpackIgnore: true */ wsModulePath)
+  const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || '18789'
+  const token = requireEnv('OPENCLAW_GATEWAY_TOKEN')
+  const connectId = randomUUID()
+  const requestId = randomUUID()
+  const timeoutMs = options.timeoutMs ?? 10000
+
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false
+    const ws = new WebSocket(gatewayUrl(gatewayPort), {
+      headers: {
+        Origin: gatewayOrigin(gatewayPort),
+      },
+      maxPayload: 25 * 1024 * 1024,
+    })
+
+    const cleanupSocket = () => {
+      ws.removeAllListeners('message')
+      ws.removeAllListeners('close')
+      ws.removeAllListeners('error')
+      ws.on('close', () => {})
+      ws.on('error', () => {})
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close()
+        } else if (ws.readyState === WebSocket.CONNECTING) {
+          ws.terminate()
+        }
+      } catch {
+        // no-op
+      }
+    }
+
+    const finish = (err?: Error, payload?: T) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      cleanupSocket()
+
+      if (err) {
+        reject(err)
+        return
+      }
+
+      resolve(payload as T)
+    }
+
+    const sendRequest = (id: string, requestMethod: string, requestParams: unknown) => {
+      ws.send(JSON.stringify({ type: 'req', id, method: requestMethod, params: requestParams }))
+    }
+
+    const timer = setTimeout(() => {
+      finish(new Error('Gateway ' + method + ' timed out after ' + timeoutMs + 'ms'))
+    }, timeoutMs)
+
+    ws.on('error', (err: unknown) => {
+      finish(err instanceof Error ? err : new Error(String(err)))
+    })
+
+    ws.on('close', (code: number, reason: Buffer) => {
+      if (settled) return
+      const reasonText = reason.toString() || 'no close reason'
+      finish(new Error('gateway closed (' + code + '): ' + reasonText))
+    })
+
+    ws.on('message', (raw: unknown) => {
+      const text =
+        typeof raw === 'string'
+          ? raw
+          : Buffer.isBuffer(raw)
+            ? raw.toString('utf-8')
+            : String(raw)
+
+      let parsed: any
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        return
+      }
+
+      if (parsed.type === 'event' && parsed.event === 'connect.challenge') {
+        sendRequest(connectId, 'connect', {
+          minProtocol: 3,
+          maxProtocol: 3,
+          client: {
+            id: 'openclaw-control-ui',
+            displayName: 'clawport-ui',
+            version: '0.8.3',
+            platform: process.platform,
+            mode: 'ui',
+            instanceId: randomUUID(),
+          },
+          caps: [],
+          auth: { token },
+          role: 'operator',
+          scopes: [options.scope],
+        })
+        return
+      }
+
+      if (parsed.type !== 'res') return
+
+      if (parsed.id === connectId) {
+        if (parsed.ok) {
+          sendRequest(requestId, method, params)
+          return
+        }
+
+        finish(new Error(parsed.error?.message || 'gateway connect failed'))
+        return
+      }
+
+      if (parsed.id !== requestId) return
+
+      if (parsed.ok) {
+        finish(undefined, parsed.payload as T)
+        return
+      }
+
+      finish(new Error(parsed.error?.message || ('gateway ' + method + ' failed')))
+    })
+  })
+}
+EOF
+	cat <<'EOF' > "$INSTALL_DIR/lib/crons.ts"
+import { CronJob, CronDelivery } from '@/lib/types'
+import { parseSchedule, describeCron } from './cron-utils'
+import { loadRegistry } from '@/lib/agents-registry'
+import { callOpenClawControlUIMethod } from './openclaw-gateway'
+
+/**
+ * Match a cron job name to an agent by prefix.
+ * Tries each known agent ID as a prefix (longest first to avoid
+ * partial matches, e.g. "seo-team" matches before "seo").
+ */
+function matchAgent(name: string, agentIds: string[]): string | null {
+  const sorted = [...agentIds].sort((a, b) => b.length - a.length)
+  for (const id of sorted) {
+    if (name === id || name.startsWith(id + '-')) return id
+  }
+  return null
+}
+
+export async function getCrons(): Promise<CronJob[]> {
+  try {
+    const parsed = await callOpenClawControlUIMethod<Record<string, unknown> | unknown[]>(
+      'cron.list',
+      { includeDisabled: false },
+      { scope: 'operator.read', timeoutMs: 10000 }
+    )
+
+    const jobs: unknown[] = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed.jobs)
+        ? parsed.jobs
+        : Array.isArray(parsed.data)
+          ? parsed.data
+          : []
+
+    const agentIds = loadRegistry().map(a => a.id)
+
+    return jobs.map((job: unknown) => {
+      const j = job as Record<string, unknown>
+      const state = (j.state as Record<string, unknown>) || {}
+      const name = String(j.name || '')
+      const { expression: schedule, timezone } = parseSchedule(j.schedule)
+
+      const rawStatus = state.status ?? j.status ?? ''
+      let status: 'ok' | 'error' | 'idle' = 'idle'
+      if (rawStatus === 'error' || rawStatus === 'failed') {
+        status = 'error'
+      } else if (rawStatus === 'ok' || rawStatus === 'success' || rawStatus === 'completed') {
+        status = 'ok'
+      }
+
+      const nextRunMs = state.nextRunAtMs ?? state.nextRunAt ?? j.nextRunAtMs ?? j.nextRunAt
+      const nextRun = nextRunMs
+        ? new Date(Number(nextRunMs)).toISOString()
+        : null
+
+      const lastRunRaw = state.lastRunAtMs ?? state.lastRunAt ?? j.lastRunAtMs ?? j.lastRunAt ?? j.last
+      const lastRun = lastRunRaw
+        ? (typeof lastRunRaw === 'number' ? new Date(lastRunRaw).toISOString() : String(lastRunRaw))
+        : null
+
+      const lastError = (state.lastError ?? state.error ?? j.lastError)
+        ? String(state.lastError ?? state.error ?? j.lastError)
+        : null
+
+      const rawDelivery = j.delivery as Record<string, unknown> | undefined
+      let delivery: CronDelivery | null = null
+      if (rawDelivery && typeof rawDelivery === 'object') {
+        delivery = {
+          mode: String(rawDelivery.mode || ''),
+          channel: String(rawDelivery.channel || ''),
+          to: rawDelivery.to ? String(rawDelivery.to) : null,
+        }
+      }
+
+      const lastDurationMs = typeof state.lastDurationMs === 'number' ? state.lastDurationMs : null
+      const consecutiveErrors = typeof state.consecutiveErrors === 'number' ? state.consecutiveErrors : 0
+      const lastDeliveryStatus = typeof state.lastDeliveryStatus === 'string' ? state.lastDeliveryStatus : null
+
+      return {
+        id: String(j.id || j.name || ''),
+        name,
+        schedule,
+        scheduleDescription: describeCron(schedule),
+        timezone,
+        status,
+        lastRun,
+        nextRun,
+        lastError,
+        agentId: matchAgent(name, agentIds),
+        description: typeof j.description === 'string' ? j.description : null,
+        enabled: j.enabled !== false,
+        delivery,
+        lastDurationMs,
+        consecutiveErrors,
+        lastDeliveryStatus,
+      }
+    })
+  } catch (err) {
+    throw new Error(
+      'Failed to fetch cron jobs: ' + (err instanceof Error ? err.message : String(err))
+    )
+  }
+}
+EOF
+	cat <<'EOF' > "$INSTALL_DIR/app/api/crons/route.ts"
+import { getCrons } from '@/lib/crons'
+import { loadPipelines } from '@/lib/cron-pipelines.server'
+import { NextResponse } from 'next/server'
+
+export async function GET() {
+  const pipelines = loadPipelines()
+
+  try {
+    const crons = await getCrons()
+    return NextResponse.json({ crons, pipelines })
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    console.warn('ClawPort cron API degraded:', error)
+    return NextResponse.json({ crons: [], pipelines, error, degraded: true })
+  }
+}
+EOF
+	cat <<'EOF' > "$INSTALL_DIR/lib/agents.ts"
+import { Agent } from '@/lib/types'
+import { readFileSync, existsSync } from 'fs'
+import { loadRegistry } from '@/lib/agents-registry'
+
+const AGENTS_CACHE_TTL_MS = 5000
+
+let cachedAgents: Agent[] | null = null
+let cachedAgentsExpiresAt = 0
+
+function cloneAgent(agent: Agent): Agent {
+  return {
+    ...agent,
+    tools: [...agent.tools],
+    crons: [...agent.crons],
+  }
+}
+
+export async function getAgents(): Promise<Agent[]> {
+  const now = Date.now()
+  if (cachedAgents && now < cachedAgentsExpiresAt) {
+    return cachedAgents.map(cloneAgent)
+  }
+
+  const workspacePath = process.env.WORKSPACE_PATH || ''
+  const registry = loadRegistry()
+
+  const agents = registry.map((entry) => {
+    let soul: string | null = null
+    if (entry.soulPath && workspacePath) {
+      try {
+        const fullPath = workspacePath + '/' + entry.soulPath
+        if (existsSync(fullPath)) {
+          soul = readFileSync(fullPath, 'utf-8')
+        }
+      } catch {
+        soul = null
+      }
+    }
+    return {
+      ...entry,
+      soul,
+      crons: [],
+    }
+  })
+
+  cachedAgents = agents
+  cachedAgentsExpiresAt = now + AGENTS_CACHE_TTL_MS
+  return agents.map(cloneAgent)
+}
+
+export async function getAgent(id: string): Promise<Agent | null> {
+  const agents = await getAgents()
+  return agents.find((a) => a.id === id) ?? null
+}
+EOF
+	python3 <<'PY'
+from pathlib import Path
+import re
+
+install_dir = Path(%s)
+
+agents_registry_path = install_dir / 'lib' / 'agents-registry.ts'
+agents_registry = agents_registry_path.read_text()
+
+old_cli = """import { execSync } from 'child_process'\n"""
+new_cli = ""
+if old_cli not in agents_registry:
+    raise SystemExit('failed to remove execSync import from agents-registry.ts')
+agents_registry = agents_registry.replace(old_cli, new_cli, 1)
+
+new_list = """export function listCliAgents(_openclawBin: string): CliAgentEntry[] | null {\n  // Operator-managed ClawPort runs in a single workspace pod, so shelling out to\n  // the OpenClaw CLI only adds latency and memory pressure without improving\n  // the in-pod registry.\n  return null\n}\n"""
+list_pattern = re.compile(
+    r"export function listCliAgents\(openclawBin: string\): CliAgentEntry\[\] \| null \{\n"
+    r"  try \{\n"
+    r"    const raw = execSync\([\s\S]+?\n"
+    r"  \}\n"
+    r"\}\n"
+)
+if not list_pattern.search(agents_registry):
+    raise SystemExit('failed to patch listCliAgents in agents-registry.ts')
+agents_registry = list_pattern.sub(new_list, agents_registry, count=1)
+agents_registry_path.write_text(agents_registry)
+
+claude_usage_path = install_dir / 'lib' / 'claude-usage.ts'
+claude_usage = claude_usage_path.read_text()
+old_guard = """export function getKeychainToken(): string | null {\n  try {\n"""
+new_guard = """export function getKeychainToken(): string | null {\n  if (process.platform !== 'darwin') return null\n  try {\n"""
+if old_guard not in claude_usage:
+    raise SystemExit('failed to patch getKeychainToken in claude-usage.ts')
+claude_usage_path.write_text(claude_usage.replace(old_guard, new_guard, 1))
+PY
+	"$INSTALL_DIR/node_modules/.bin/next" build
+	printf '%%s' "$VERSION" > "$MARKER"`,
+		shellQuote(ClawPortInstallDir),
+		shellQuote(ClawPortVersionMarker),
+		shellQuote(ClawPortBuildMarkerVersion),
+		shellQuote(ClawPortPackageName+"@"+ClawPortPackageVersion),
+		shellQuote(ClawPortInstallDir),
+	)
+
+	mounts := []corev1.VolumeMount{
+		{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+		{Name: "clawport-tmp", MountPath: "/tmp"},
+		{Name: "clawport-cache", MountPath: "/npm-cache"},
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: "/tmp"},
+		{Name: "NPM_CONFIG_CACHE", Value: "/npm-cache"},
+		{Name: "NEXT_TELEMETRY_DISABLED", Value: "1"},
+		// ClawPort evaluates API route modules during `next build`, and the OpenAI
+		// client constructor errors if no key is present. A dummy key unblocks the
+		// static build; real runtime credentials still come from the instance env.
+		{Name: "OPENAI_API_KEY", Value: "build-placeholder"},
+	}
+
+	if cab := instance.Spec.Security.CABundle; cab != nil {
+		key := cab.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/custom-ca-bundle.crt",
+			SubPath:   key,
+			ReadOnly:  true,
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_EXTRA_CA_CERTS",
+			Value: "/etc/ssl/certs/custom-ca-bundle.crt",
+		})
+	}
+
+	return corev1.Container{
+		Name:                     "init-clawport",
+		Image:                    GetImage(instance),
+		Command:                  []string{"sh", "-c", script},
+		ImagePullPolicy:          getPullPolicy(instance),
+		Env:                      env,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false),
+			RunAsNonRoot:             Ptr(podRunAsNonRoot(instance)),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
 			},
 		},
 		VolumeMounts: mounts,
@@ -1287,6 +1841,105 @@ func buildGatewayProxyContainer(instance *openclawv1alpha1.OpenClawInstance) cor
 		},
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+	}
+}
+
+// buildClawPortContainer starts the pre-built ClawPort Next.js server from the
+// PVC-backed install directory prepared by init-clawport.
+func buildClawPortContainer(instance *openclawv1alpha1.OpenClawInstance, gatewayTokenSecretName string) corev1.Container {
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: "/home/openclaw"},
+		{Name: "WORKSPACE_PATH", Value: "/home/openclaw/.openclaw/workspace"},
+		{Name: "OPENCLAW_BIN", Value: "/usr/local/bin/openclaw"},
+		{Name: "OPENCLAW_GATEWAY_PORT", Value: fmt.Sprintf("%d", GatewayPort)},
+		// Leave headroom for native allocations while giving the Next.js sidecar enough heap for chat page bursts.
+		{Name: "NODE_OPTIONS", Value: "--max-old-space-size=1024"},
+		{Name: "NEXT_TELEMETRY_DISABLED", Value: "1"},
+		{Name: "PORT", Value: fmt.Sprintf("%d", ClawPortWebPort)},
+	}
+
+	if gatewayTokenSecretName != "" {
+		env = append(env, corev1.EnvVar{
+			Name: "OPENCLAW_GATEWAY_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: gatewayTokenSecretName},
+					Key:                  GatewayTokenSecretKey,
+				},
+			},
+		})
+	}
+
+	command := []string{
+		"sh",
+		"-c",
+		fmt.Sprintf("cd %s && exec %s/node_modules/.bin/next start --hostname 0.0.0.0 --port %d",
+			ClawPortInstallDir, ClawPortInstallDir, ClawPortWebPort),
+	}
+
+	return corev1.Container{
+		Name:                     "clawport-ui",
+		Image:                    GetImage(instance),
+		Command:                  command,
+		ImagePullPolicy:          getPullPolicy(instance),
+		Ports:                    []corev1.ContainerPort{{Name: "clawport-web", ContainerPort: ClawPortWebPort, Protocol: corev1.ProtocolTCP}},
+		Env:                      env,
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("250m"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("2Gi"),
+			},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: Ptr(false),
+			ReadOnlyRootFilesystem:   Ptr(false),
+			RunAsNonRoot:             Ptr(true),
+			RunAsUser:                Ptr(int64(1000)),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: "/home/openclaw/.openclaw"},
+			{Name: "clawport-tmp", MountPath: "/tmp"},
+		},
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path:   "/",
+					Port:   intstr.FromInt32(ClawPortWebPort),
+					Scheme: corev1.URISchemeHTTP,
+				},
+			},
+			InitialDelaySeconds: 3,
+			PeriodSeconds:       5,
+			TimeoutSeconds:      3,
+			SuccessThreshold:    1,
+			FailureThreshold:    6,
+		},
+		StartupProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path:   "/",
+					Port:   intstr.FromInt32(ClawPortWebPort),
+					Scheme: corev1.URISchemeHTTP,
+				},
+			},
+			InitialDelaySeconds: 1,
+			PeriodSeconds:       2,
+			TimeoutSeconds:      3,
+			SuccessThreshold:    1,
+			FailureThreshold:    60,
+		},
 	}
 }
 
@@ -1814,6 +2467,40 @@ func buildVolumes(instance *openclawv1alpha1.OpenClawInstance, skillPacks *Resol
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
 		})
+	}
+
+	if IsMemOSEnabled(instance) {
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "memos-tmp",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+			corev1.Volume{
+				Name: "memos-cache",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+		)
+	}
+
+	if IsClawPortEnabled(instance) {
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "clawport-tmp",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+			corev1.Volume{
+				Name: "clawport-cache",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
+			},
+		)
 	}
 
 	// Runtime dep tmp volumes

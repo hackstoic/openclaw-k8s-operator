@@ -303,10 +303,10 @@ func TestBuildStatefulSet_Defaults(t *testing.T) {
 		t.Error("pod security context: seccomp profile should be RuntimeDefault")
 	}
 
-	// Containers (main + gateway-proxy)
+	// Containers (main + gateway-proxy + clawport-ui)
 	containers := sts.Spec.Template.Spec.Containers
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers (main + gateway-proxy), got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + clawport-ui), got %d", len(containers))
 	}
 
 	main := containers[0]
@@ -432,8 +432,8 @@ func TestBuildStatefulSet_WithChromium(t *testing.T) {
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(containers) != 2 {
-		t.Fatalf("expected 2 containers (main + gateway-proxy), got %d", len(containers))
+	if len(containers) != 3 {
+		t.Fatalf("expected 3 containers (main + gateway-proxy + clawport-ui), got %d", len(containers))
 	}
 
 	// Find chromium in init containers (native sidecar)
@@ -866,8 +866,8 @@ func TestBuildStatefulSet_ConfigVolume_RawConfig(t *testing.T) {
 
 	// Init container should copy config from ConfigMap to data volume
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 3 {
-		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
+	if len(initContainers) != 5 {
+		t.Fatalf("expected 5 init containers (init-config + init-uv + init-pip + init-memos + init-clawport), got %d", len(initContainers))
 	}
 	initC := initContainers[0]
 	if initC.Name != "init-config" {
@@ -911,8 +911,8 @@ func TestBuildStatefulSet_ConfigVolume_ConfigMapRef(t *testing.T) {
 	// The controller reads the external CM and writes enriched content into the
 	// operator-managed CM under "openclaw.json", so the init container always uses that key.
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 3 {
-		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
+	if len(initContainers) != 5 {
+		t.Fatalf("expected 5 init containers (init-config + init-uv + init-pip + init-memos + init-clawport), got %d", len(initContainers))
 	}
 	initC := initContainers[0]
 	assertVolumeMount(t, initC.VolumeMounts, "data", "/data")
@@ -946,8 +946,8 @@ func TestBuildStatefulSet_ConfigMapRef_DefaultKey(t *testing.T) {
 
 	// Init container should use "openclaw.json" (operator-managed key)
 	initContainers := sts.Spec.Template.Spec.InitContainers
-	if len(initContainers) != 3 {
-		t.Fatalf("expected 3 init containers (init-config + init-uv + init-pip), got %d", len(initContainers))
+	if len(initContainers) != 5 {
+		t.Fatalf("expected 5 init containers (init-config + init-uv + init-pip + init-memos + init-clawport), got %d", len(initContainers))
 	}
 	expectedPrefix := "cp /config/'openclaw.json' /data/openclaw.json"
 	if !strings.HasPrefix(initContainers[0].Command[2], expectedPrefix) {
@@ -971,8 +971,8 @@ func TestBuildStatefulSet_VanillaDeployment_HasInitContainer(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 
 	// Vanilla deployments get init-config + init-uv + init-pip
-	if len(sts.Spec.Template.Spec.InitContainers) != 3 {
-		t.Fatalf("expected 3 init containers for vanilla deployment, got %d", len(sts.Spec.Template.Spec.InitContainers))
+	if len(sts.Spec.Template.Spec.InitContainers) != 5 {
+		t.Fatalf("expected 5 init containers for vanilla deployment, got %d", len(sts.Spec.Template.Spec.InitContainers))
 	}
 	if sts.Spec.Template.Spec.InitContainers[0].Name != "init-config" {
 		t.Errorf("init container name = %q, want %q", sts.Spec.Template.Spec.InitContainers[0].Name, "init-config")
@@ -1372,13 +1372,14 @@ func TestBuildService_Default(t *testing.T) {
 		t.Error("service selector does not match expected values")
 	}
 
-	// Ports - should have gateway, canvas, and metrics (metrics enabled by default)
-	if len(svc.Spec.Ports) != 3 {
-		t.Fatalf("expected 3 ports, got %d", len(svc.Spec.Ports))
+	// Ports - should have gateway, canvas, clawport-web, and metrics (metrics enabled by default)
+	if len(svc.Spec.Ports) != 4 {
+		t.Fatalf("expected 4 ports, got %d", len(svc.Spec.Ports))
 	}
 
 	assertServicePortWithTarget(t, svc.Spec.Ports, "gateway", int32(GatewayPort), int32(GatewayProxyPort))
 	assertServicePortWithTarget(t, svc.Spec.Ports, "canvas", int32(CanvasPort), int32(CanvasProxyPort))
+	assertServicePort(t, svc.Spec.Ports, "clawport-web", int32(ClawPortWebPort))
 	assertServicePort(t, svc.Spec.Ports, "metrics", DefaultMetricsPort)
 }
 
@@ -1388,12 +1389,13 @@ func TestBuildService_WithChromium(t *testing.T) {
 
 	svc := BuildService(instance)
 
-	if len(svc.Spec.Ports) != 4 {
-		t.Fatalf("expected 4 ports with chromium, got %d", len(svc.Spec.Ports))
+	if len(svc.Spec.Ports) != 5 {
+		t.Fatalf("expected 5 ports with chromium, got %d", len(svc.Spec.Ports))
 	}
 
 	assertServicePortWithTarget(t, svc.Spec.Ports, "gateway", int32(GatewayPort), int32(GatewayProxyPort))
 	assertServicePortWithTarget(t, svc.Spec.Ports, "canvas", int32(CanvasPort), int32(CanvasProxyPort))
+	assertServicePort(t, svc.Spec.Ports, "clawport-web", int32(ClawPortWebPort))
 	assertServicePort(t, svc.Spec.Ports, "chromium", int32(ChromiumPort))
 	assertServicePort(t, svc.Spec.Ports, "metrics", DefaultMetricsPort)
 }
@@ -1594,12 +1596,13 @@ func TestBuildNetworkPolicy_Default(t *testing.T) {
 		t.Errorf("ingress namespace selector = %v, want test-ns", nsSel.MatchLabels)
 	}
 
-	// Ingress ports - gateway proxy and canvas proxy
-	if len(firstIngress.Ports) != 2 {
-		t.Fatalf("expected 2 ingress ports, got %d", len(firstIngress.Ports))
+	// Ingress ports - gateway proxy, canvas proxy, and clawport-web
+	if len(firstIngress.Ports) != 3 {
+		t.Fatalf("expected 3 ingress ports, got %d", len(firstIngress.Ports))
 	}
 	assertNPPort(t, firstIngress.Ports, GatewayProxyPort)
 	assertNPPort(t, firstIngress.Ports, CanvasProxyPort)
+	assertNPPort(t, firstIngress.Ports, ClawPortWebPort)
 
 	// Egress rules - DNS (UDP+TCP 53) and HTTPS (443)
 	if len(np.Spec.Egress) < 2 {
@@ -3200,8 +3203,8 @@ func TestBuildIngress_Basic(t *testing.T) {
 	if path.Backend.Service.Name != "ing-test" {
 		t.Errorf("ingress backend service name = %q, want %q", path.Backend.Service.Name, "ing-test")
 	}
-	if path.Backend.Service.Port.Number != int32(GatewayPort) {
-		t.Errorf("ingress backend port = %d, want %d", path.Backend.Service.Port.Number, GatewayPort)
+	if path.Backend.Service.Port.Number != int32(ClawPortWebPort) {
+		t.Errorf("ingress backend port = %d, want %d", path.Backend.Service.Port.Number, ClawPortWebPort)
 	}
 
 	// TLS
@@ -3508,8 +3511,8 @@ func TestBuildIngress_DefaultBackendPort(t *testing.T) {
 	ing := BuildIngress(instance)
 
 	backend := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service
-	if backend.Port.Number != int32(GatewayPort) {
-		t.Errorf("backend port = %d, want %d (GatewayPort)", backend.Port.Number, GatewayPort)
+	if backend.Port.Number != int32(ClawPortWebPort) {
+		t.Errorf("backend port = %d, want %d (ClawPortWebPort)", backend.Port.Number, ClawPortWebPort)
 	}
 }
 
@@ -3537,8 +3540,257 @@ func TestBuildIngress_MixedPorts(t *testing.T) {
 	if paths[0].Backend.Service.Port.Number != 3978 {
 		t.Errorf("first path backend port = %d, want 3978", paths[0].Backend.Service.Port.Number)
 	}
-	if paths[1].Backend.Service.Port.Number != int32(GatewayPort) {
-		t.Errorf("second path backend port = %d, want %d (GatewayPort)", paths[1].Backend.Service.Port.Number, GatewayPort)
+	if paths[1].Backend.Service.Port.Number != int32(ClawPortWebPort) {
+		t.Errorf("second path backend port = %d, want %d (ClawPortWebPort)", paths[1].Backend.Service.Port.Number, ClawPortWebPort)
+	}
+}
+
+func TestBuildStatefulSet_DefaultIncludesClawPortAndMemOS(t *testing.T) {
+	instance := newTestInstance("clawport-default")
+
+	sts := BuildStatefulSet(instance, "gw-secret", nil)
+
+	if findContainer(sts.Spec.Template.Spec.Containers, "clawport-ui") == nil {
+		t.Fatal("clawport-ui sidecar should be present by default")
+	}
+	if findContainer(sts.Spec.Template.Spec.InitContainers, "init-clawport") == nil {
+		t.Fatal("init-clawport should be present by default")
+	}
+	if findContainer(sts.Spec.Template.Spec.InitContainers, "init-memos") == nil {
+		t.Fatal("init-memos should be present by default")
+	}
+
+	clawport := findContainer(sts.Spec.Template.Spec.Containers, "clawport-ui")
+	if clawport == nil {
+		t.Fatal("clawport-ui sidecar not found")
+	}
+	if clawport.Image != "ghcr.io/openclaw/openclaw:latest" {
+		t.Errorf("clawport-ui image = %q, want %q", clawport.Image, "ghcr.io/openclaw/openclaw:latest")
+	}
+	if len(clawport.Ports) != 1 || clawport.Ports[0].ContainerPort != ClawPortWebPort {
+		t.Fatalf("clawport-ui should expose port %d", ClawPortWebPort)
+	}
+	if findEnv(clawport.Env, "WORKSPACE_PATH") == nil {
+		t.Error("clawport-ui should have WORKSPACE_PATH env var")
+	}
+	if env := findEnv(clawport.Env, "OPENCLAW_GATEWAY_TOKEN"); env == nil || env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil || env.ValueFrom.SecretKeyRef.Name != "gw-secret" {
+		t.Error("clawport-ui should read OPENCLAW_GATEWAY_TOKEN from the gateway secret")
+	}
+	if env := findEnv(clawport.Env, "NODE_OPTIONS"); env == nil || env.Value != "--max-old-space-size=1024" {
+		t.Error("clawport-ui should cap the Node heap for sidecar stability")
+	}
+	if clawport.ReadinessProbe == nil || clawport.StartupProbe == nil {
+		t.Error("clawport-ui should have readiness and startup probes")
+	}
+	if cpuReq := clawport.Resources.Requests.Cpu(); cpuReq == nil || cpuReq.Cmp(resource.MustParse("250m")) != 0 {
+		t.Error("clawport-ui should request 250m of cpu")
+	}
+	if memReq := clawport.Resources.Requests.Memory(); memReq == nil || memReq.Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Error("clawport-ui should request 1Gi of memory")
+	}
+	if cpuLim := clawport.Resources.Limits.Cpu(); cpuLim == nil || cpuLim.Cmp(resource.MustParse("1")) != 0 {
+		t.Error("clawport-ui should limit cpu to 1 core")
+	}
+	if memLim := clawport.Resources.Limits.Memory(); memLim == nil || memLim.Cmp(resource.MustParse("2Gi")) != 0 {
+		t.Error("clawport-ui should limit memory to 2Gi")
+	}
+
+	for _, name := range []string{"clawport-tmp", "clawport-cache", "memos-tmp", "memos-cache"} {
+		if findVolume(sts.Spec.Template.Spec.Volumes, name) == nil {
+			t.Errorf("expected volume %q to be present", name)
+		}
+	}
+}
+
+func TestBuildStatefulSet_ClawPortInitScriptAddsGatewayBridgeAndCronFallbackPatch(t *testing.T) {
+	instance := newTestInstance("clawport-init-script")
+
+	sts := BuildStatefulSet(instance, "gw-secret", nil)
+
+	initClawport := findContainer(sts.Spec.Template.Spec.InitContainers, "init-clawport")
+	if initClawport == nil {
+		t.Fatal("init-clawport should be present by default")
+	}
+
+	command := strings.Join(initClawport.Command, " ")
+	if !strings.Contains(command, "openclaw-control-ui") {
+		t.Fatal("init-clawport should patch in the control-ui gateway bridge")
+	}
+	if !strings.Contains(command, "/app/node_modules/ws/index.js") {
+		t.Fatal("init-clawport should import ws from the OpenClaw runtime")
+	}
+	if !strings.Contains(command, "ws.readyState === WebSocket.CONNECTING") {
+		t.Fatal("init-clawport should safely terminate connecting gateway sockets")
+	}
+	if !strings.Contains(command, "AGENTS_CACHE_TTL_MS = 5000") {
+		t.Fatal("init-clawport should cache the agent list in-process")
+	}
+	if !strings.Contains(command, "Operator-managed ClawPort runs in a single workspace pod") {
+		t.Fatal("init-clawport should disable CLI agent discovery in the sidecar")
+	}
+	if !strings.Contains(command, "process.platform !== 'darwin'") {
+		t.Fatal("init-clawport should skip macOS keychain lookups on Linux")
+	}
+	if !strings.Contains(command, "ClawPort cron API degraded:") {
+		t.Fatal("init-clawport should patch the cron API route with a degraded fallback")
+	}
+	if !strings.Contains(command, ClawPortBuildMarkerVersion) {
+		t.Fatal("init-clawport should use the operator build marker version")
+	}
+}
+
+func TestBuildStatefulSet_MemOSInitScriptBuildsBetterSQLite3(t *testing.T) {
+	instance := newTestInstance("memos-init-script")
+
+	sts := BuildStatefulSet(instance, "gw-secret", nil)
+
+	initMemos := findContainer(sts.Spec.Template.Spec.InitContainers, "init-memos")
+	if initMemos == nil {
+		t.Fatal("init-memos should be present by default")
+	}
+
+	command := strings.Join(initMemos.Command, " ")
+	if !strings.Contains(command, "npm rebuild better-sqlite3 --foreground-scripts") {
+		t.Fatal("init-memos should rebuild better-sqlite3 for the runtime Node ABI")
+	}
+	if !strings.Contains(command, "better-sqlite3 ok") {
+		t.Fatal("init-memos should verify the rebuilt better-sqlite3 binding")
+	}
+	if !strings.Contains(command, MemOSInstallMarkerVersion) {
+		t.Fatal("init-memos should use the operator install marker version")
+	}
+}
+
+func TestBuildStatefulSet_ClawPortDisabledOmitsManagedContainers(t *testing.T) {
+	instance := newTestInstance("clawport-off")
+	instance.Spec.ClawPort.Enabled = Ptr(false)
+
+	sts := BuildStatefulSet(instance, "gw-secret", nil)
+
+	if findContainer(sts.Spec.Template.Spec.Containers, "clawport-ui") != nil {
+		t.Fatal("clawport-ui sidecar should be omitted when disabled")
+	}
+	if findContainer(sts.Spec.Template.Spec.InitContainers, "init-clawport") != nil {
+		t.Fatal("init-clawport should be omitted when ClawPort is disabled")
+	}
+	if findVolume(sts.Spec.Template.Spec.Volumes, "clawport-tmp") != nil {
+		t.Fatal("clawport volumes should be omitted when disabled")
+	}
+}
+
+func TestBuildConfigMap_MemOSInjectsDefaults(t *testing.T) {
+	instance := newTestInstance("memos-config")
+
+	cm := BuildConfigMap(instance, "", nil)
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(cm.Data["openclaw.json"]), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	agents := parsed["agents"].(map[string]interface{})
+	defaults := agents["defaults"].(map[string]interface{})
+	memorySearch := defaults["memorySearch"].(map[string]interface{})
+	if enabled := memorySearch["enabled"].(bool); enabled {
+		t.Fatal("agents.defaults.memorySearch.enabled should default to false for MemOS")
+	}
+
+	plugins := parsed["plugins"].(map[string]interface{})
+	slots := plugins["slots"].(map[string]interface{})
+	if slots["memory"] != MemOSPluginID {
+		t.Fatalf("plugins.slots.memory = %v, want %q", slots["memory"], MemOSPluginID)
+	}
+	entries := plugins["entries"].(map[string]interface{})
+	entry := entries[MemOSPluginID].(map[string]interface{})
+	if enabled := entry["enabled"].(bool); !enabled {
+		t.Fatal("plugins.entries.memos-local-openclaw-plugin.enabled should default to true")
+	}
+}
+
+func TestBuildConfigMap_MemOSPreservesUserOverrides(t *testing.T) {
+	instance := newTestInstance("memos-overrides")
+	instance.Spec.Config.Raw = &openclawv1alpha1.RawConfig{
+		RawExtension: runtime.RawExtension{Raw: []byte(`{
+			"agents":{"defaults":{"memorySearch":{"enabled":true}}},
+			"plugins":{
+				"slots":{"memory":"custom-memory"},
+				"entries":{"memos-local-openclaw-plugin":{"enabled":false,"config":{"mode":"manual"}}}
+			}
+		}`)},
+	}
+
+	cm := BuildConfigMap(instance, "", nil)
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(cm.Data["openclaw.json"]), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	agents := parsed["agents"].(map[string]interface{})
+	defaults := agents["defaults"].(map[string]interface{})
+	memorySearch := defaults["memorySearch"].(map[string]interface{})
+	if enabled := memorySearch["enabled"].(bool); !enabled {
+		t.Fatal("user-set memorySearch.enabled=true should be preserved")
+	}
+
+	plugins := parsed["plugins"].(map[string]interface{})
+	slots := plugins["slots"].(map[string]interface{})
+	if slots["memory"] != "custom-memory" {
+		t.Fatalf("plugins.slots.memory = %v, want custom-memory", slots["memory"])
+	}
+	entries := plugins["entries"].(map[string]interface{})
+	entry := entries[MemOSPluginID].(map[string]interface{})
+	if enabled := entry["enabled"].(bool); enabled {
+		t.Fatal("user-set plugin enabled=false should be preserved")
+	}
+}
+
+func TestBuildConfigMap_MemOSDisabledSkipsInjection(t *testing.T) {
+	instance := newTestInstance("memos-disabled")
+	instance.Spec.MemOS.Enabled = Ptr(false)
+
+	cm := BuildConfigMap(instance, "", nil)
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(cm.Data["openclaw.json"]), &parsed); err != nil {
+		t.Fatalf("failed to parse config JSON: %v", err)
+	}
+
+	if _, ok := parsed["plugins"]; ok {
+		t.Fatal("plugins config should not be injected when MemOS is disabled")
+	}
+	if _, ok := parsed["agents"]; ok {
+		t.Fatal("agents config should not be injected when MemOS is disabled")
+	}
+}
+
+func TestBuildIngress_DefaultBackendPort_ClawPortDisabled(t *testing.T) {
+	instance := newTestInstance("ing-gateway-default")
+	instance.Spec.ClawPort.Enabled = Ptr(false)
+	instance.Spec.Networking.Ingress = openclawv1alpha1.IngressSpec{
+		Enabled: true,
+		Hosts: []openclawv1alpha1.IngressHost{
+			{Host: "test.example.com"},
+		},
+	}
+
+	ing := BuildIngress(instance)
+	backend := ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service
+	if backend.Port.Number != int32(GatewayPort) {
+		t.Fatalf("backend port = %d, want %d when ClawPort is disabled", backend.Port.Number, GatewayPort)
+	}
+}
+
+func TestBuildService_ClawPortDisabled(t *testing.T) {
+	instance := newTestInstance("svc-no-clawport")
+	instance.Spec.ClawPort.Enabled = Ptr(false)
+
+	svc := BuildService(instance)
+
+	for _, port := range svc.Spec.Ports {
+		if port.Name == "clawport-web" {
+			t.Fatal("clawport-web service port should be omitted when ClawPort is disabled")
+		}
 	}
 }
 
@@ -3964,6 +4216,24 @@ func findVolume(volumes []corev1.Volume, name string) *corev1.Volume {
 	for i := range volumes {
 		if volumes[i].Name == name {
 			return &volumes[i]
+		}
+	}
+	return nil
+}
+
+func findContainer(containers []corev1.Container, name string) *corev1.Container {
+	for i := range containers {
+		if containers[i].Name == name {
+			return &containers[i]
+		}
+	}
+	return nil
+}
+
+func findEnv(envs []corev1.EnvVar, name string) *corev1.EnvVar {
+	for i := range envs {
+		if envs[i].Name == name {
+			return &envs[i]
 		}
 	}
 	return nil
@@ -6147,8 +6417,8 @@ func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T
 	sts := BuildStatefulSet(instance, "", nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(initContainers) != 5 {
-		t.Fatalf("expected 5 init containers, got %d", len(initContainers))
+	if len(initContainers) != 7 {
+		t.Fatalf("expected 7 init containers, got %d", len(initContainers))
 	}
 	if initContainers[0].Name != "init-config" {
 		t.Errorf("initContainers[0] = %q, want init-config", initContainers[0].Name)
@@ -6162,8 +6432,14 @@ func TestBuildStatefulSet_CustomInitContainers_AfterOperatorManaged(t *testing.T
 	if initContainers[3].Name != "init-skills" {
 		t.Errorf("initContainers[3] = %q, want init-skills", initContainers[3].Name)
 	}
-	if initContainers[4].Name != "user-init" {
-		t.Errorf("initContainers[4] = %q, want user-init", initContainers[4].Name)
+	if initContainers[4].Name != "init-memos" {
+		t.Errorf("initContainers[4] = %q, want init-memos", initContainers[4].Name)
+	}
+	if initContainers[5].Name != "init-clawport" {
+		t.Errorf("initContainers[5] = %q, want init-clawport", initContainers[5].Name)
+	}
+	if initContainers[6].Name != "user-init" {
+		t.Errorf("initContainers[6] = %q, want user-init", initContainers[6].Name)
 	}
 }
 
@@ -6507,7 +6783,7 @@ func TestBuildStatefulSet_RuntimeDeps_InitContainerOrder(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	expected := []string{"init-config", "init-uv", "init-pip", "init-pnpm", "init-python", "init-skills", "user-init"}
+	expected := []string{"init-config", "init-uv", "init-pip", "init-pnpm", "init-python", "init-skills", "init-memos", "init-clawport", "user-init"}
 	if len(initContainers) != len(expected) {
 		t.Fatalf("expected %d init containers, got %d: %v", len(expected), len(initContainers),
 			func() []string {
@@ -7774,8 +8050,8 @@ func TestBuildStatefulSet_OllamaEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + ollama), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + clawport-ui + ollama), got %d", len(containers))
 	}
 
 	var ollama *corev1.Container
@@ -8111,8 +8387,8 @@ func TestBuildStatefulSet_OllamaAndChromiumEnabled(t *testing.T) {
 	containers := sts.Spec.Template.Spec.Containers
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + ollama), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + clawport-ui + ollama), got %d", len(containers))
 	}
 
 	names := make(map[string]bool)
@@ -9193,8 +9469,8 @@ func TestBuildService_MetricsPortDisabled(t *testing.T) {
 			t.Error("service should not include metrics port when metrics is disabled")
 		}
 	}
-	if len(svc.Spec.Ports) != 2 {
-		t.Errorf("expected 2 ports (gateway, canvas) when metrics disabled, got %d", len(svc.Spec.Ports))
+	if len(svc.Spec.Ports) != 3 {
+		t.Errorf("expected 3 ports (gateway, canvas, clawport-web) when metrics disabled, got %d", len(svc.Spec.Ports))
 	}
 }
 
@@ -9266,8 +9542,8 @@ func TestBuildStatefulSet_WebTerminalEnabled(t *testing.T) {
 	sts := BuildStatefulSet(instance, "", nil)
 	containers := sts.Spec.Template.Spec.Containers
 
-	if len(containers) != 3 {
-		t.Fatalf("expected 3 containers (main + gateway-proxy + web-terminal), got %d", len(containers))
+	if len(containers) != 4 {
+		t.Fatalf("expected 4 containers (main + gateway-proxy + clawport-ui + web-terminal), got %d", len(containers))
 	}
 
 	var wt *corev1.Container
@@ -9619,8 +9895,8 @@ func TestBuildService_WithWebTerminal(t *testing.T) {
 
 	svc := BuildService(instance)
 
-	if len(svc.Spec.Ports) != 4 {
-		t.Fatalf("expected 4 ports with web terminal (gateway, canvas, web-terminal, metrics), got %d", len(svc.Spec.Ports))
+	if len(svc.Spec.Ports) != 5 {
+		t.Fatalf("expected 5 ports with web terminal (gateway, canvas, clawport-web, web-terminal, metrics), got %d", len(svc.Spec.Ports))
 	}
 
 	// gateway and canvas use proxy targetPorts; web-terminal and metrics are direct
@@ -9640,6 +9916,8 @@ func TestBuildService_WithWebTerminal(t *testing.T) {
 			if p.TargetPort.IntValue() != int(CanvasProxyPort) {
 				t.Errorf("canvas targetPort = %d, want %d", p.TargetPort.IntValue(), CanvasProxyPort)
 			}
+		case "clawport-web":
+			assertServicePort(t, svc.Spec.Ports, "clawport-web", int32(ClawPortWebPort))
 		case "web-terminal":
 			assertServicePort(t, svc.Spec.Ports, "web-terminal", int32(WebTerminalPort))
 		case "metrics":
@@ -9654,14 +9932,14 @@ func TestBuildNetworkPolicy_WebTerminalIngressPort(t *testing.T) {
 
 	np := BuildNetworkPolicy(instance)
 
-	// Default ingress rule should have 3 ports (gateway, canvas, web-terminal)
+	// Default ingress rule should have 4 ports (gateway, canvas, clawport-web, web-terminal)
 	if len(np.Spec.Ingress) == 0 {
 		t.Fatal("expected at least one ingress rule")
 	}
 
 	ports := np.Spec.Ingress[0].Ports
-	if len(ports) != 3 {
-		t.Fatalf("expected 3 ingress ports with web terminal, got %d", len(ports))
+	if len(ports) != 4 {
+		t.Fatalf("expected 4 ingress ports with web terminal, got %d", len(ports))
 	}
 
 	// Verify web-terminal port is present
@@ -9689,8 +9967,8 @@ func TestBuildNetworkPolicy_ChromiumIngressAndEgress(t *testing.T) {
 	}
 
 	ports := np.Spec.Ingress[0].Ports
-	if len(ports) != 4 {
-		t.Fatalf("expected 4 ingress ports with chromium (gateway, canvas, chromium, chromium-proxy), got %d", len(ports))
+	if len(ports) != 5 {
+		t.Fatalf("expected 5 ingress ports with chromium (gateway, canvas, clawport-web, chromium, chromium-proxy), got %d", len(ports))
 	}
 
 	foundChromiumIngress := false
@@ -9936,6 +10214,7 @@ func TestBuildNetworkPolicy_DefaultUsesProxyPorts(t *testing.T) {
 	ports := np.Spec.Ingress[0].Ports
 	foundGW := false
 	foundCanvas := false
+	foundClawPort := false
 	for _, p := range ports {
 		if p.Port != nil {
 			switch p.Port.IntValue() {
@@ -9943,6 +10222,8 @@ func TestBuildNetworkPolicy_DefaultUsesProxyPorts(t *testing.T) {
 				foundGW = true
 			case int(CanvasProxyPort):
 				foundCanvas = true
+			case int(ClawPortWebPort):
+				foundClawPort = true
 			}
 		}
 	}
@@ -9951,6 +10232,9 @@ func TestBuildNetworkPolicy_DefaultUsesProxyPorts(t *testing.T) {
 	}
 	if !foundCanvas {
 		t.Errorf("NetworkPolicy should allow port %d (canvas proxy)", CanvasProxyPort)
+	}
+	if !foundClawPort {
+		t.Errorf("NetworkPolicy should allow port %d (clawport-web)", ClawPortWebPort)
 	}
 }
 

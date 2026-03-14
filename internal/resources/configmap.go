@@ -84,6 +84,11 @@ func BuildConfigMapFromBytes(instance *openclawv1alpha1.OpenClawInstance, baseCo
 	if enriched, err := enrichConfigWithControlUIOrigins(configBytes, instance); err == nil {
 		configBytes = enriched
 	}
+	if IsMemOSEnabled(instance) {
+		if enriched, err := enrichConfigWithMemOS(configBytes); err == nil {
+			configBytes = enriched
+		}
+	}
 	if skillPacks != nil && len(skillPacks.SkillEntries) > 0 {
 		if enriched, err := enrichConfigWithSkillPacks(configBytes, skillPacks.SkillEntries); err == nil {
 			configBytes = enriched
@@ -528,6 +533,64 @@ func deriveControlUIOrigins(instance *openclawv1alpha1.OpenClawInstance) []strin
 
 	sort.Strings(origins)
 	return origins
+}
+
+// enrichConfigWithMemOS injects the minimum config required for the built-in
+// MemOS plugin while preserving any user-provided overrides.
+func enrichConfigWithMemOS(configJSON []byte) ([]byte, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return configJSON, nil
+	}
+
+	agents, _ := config["agents"].(map[string]interface{})
+	if agents == nil {
+		agents = make(map[string]interface{})
+	}
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	if defaults == nil {
+		defaults = make(map[string]interface{})
+	}
+	memorySearch, _ := defaults["memorySearch"].(map[string]interface{})
+	if memorySearch == nil {
+		memorySearch = make(map[string]interface{})
+	}
+	if _, exists := memorySearch["enabled"]; !exists {
+		memorySearch["enabled"] = false
+	}
+	defaults["memorySearch"] = memorySearch
+	agents["defaults"] = defaults
+	config["agents"] = agents
+
+	plugins, _ := config["plugins"].(map[string]interface{})
+	if plugins == nil {
+		plugins = make(map[string]interface{})
+	}
+	slots, _ := plugins["slots"].(map[string]interface{})
+	if slots == nil {
+		slots = make(map[string]interface{})
+	}
+	if _, exists := slots["memory"]; !exists {
+		slots["memory"] = MemOSPluginID
+	}
+	plugins["slots"] = slots
+
+	entries, _ := plugins["entries"].(map[string]interface{})
+	if entries == nil {
+		entries = make(map[string]interface{})
+	}
+	entry, _ := entries[MemOSPluginID].(map[string]interface{})
+	if entry == nil {
+		entry = make(map[string]interface{})
+	}
+	if _, exists := entry["enabled"]; !exists {
+		entry["enabled"] = true
+	}
+	entries[MemOSPluginID] = entry
+	plugins["entries"] = entries
+	config["plugins"] = plugins
+
+	return json.Marshal(config)
 }
 
 // enrichConfigWithSkillPacks injects skills.entries from resolved skill packs
