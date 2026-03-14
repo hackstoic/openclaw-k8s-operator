@@ -52,6 +52,10 @@ Edit `deploy/eks/openclaw-alb-class.yaml` before applying it:
 - replace the ACM certificate ARN
 - adjust the namespace selector if you do not deploy into `openclaw`
 
+For multi-instance HTTPS, use a wildcard ACM certificate such as
+`*.example.com` so new instance hosts can be added without minting a new
+certificate for every deployment.
+
 Then apply it:
 
 ```bash
@@ -157,6 +161,44 @@ Apply it with:
 kubectl apply -f xai-assistant.yaml
 ```
 
+To launch two instances with separate domains, start from
+`deploy/eks/two-openclaw-instances.example.yaml`, replace the two example hosts
+with domains covered by your ACM certificate, then apply it:
+
+```bash
+kubectl apply -f deploy/eks/two-openclaw-instances.example.yaml
+```
+
+After both instances reconcile, print the domains and gateway tokens with:
+
+```bash
+make instance-access OPENCLAW_NAMESPACE=openclaw
+```
+
+For a quick smoke test without extending your ACM certificate first, remove the
+`tls` blocks and switch the ALB `listen-ports` annotation to HTTP-only. The
+gateway UI will still work over `http://...`, and the operator will derive the
+correct Control UI origins from those HTTP hosts.
+
+If you want a one-command flow for N instances, use:
+
+```bash
+make deploy-instances \
+  OPENCLAW_NAMESPACE=openclaw \
+  INSTANCE_COUNT=3 \
+  INSTANCE_PREFIX=agent \
+  INSTANCE_DOMAIN_TEMPLATE='{name}.claw-farm.com' \
+  INSTANCE_ROUTE53_ZONE_ID=Z01850443D2JAQL992O3
+```
+
+This command:
+
+- generates numbered instances like `agent-01`, `agent-02`, `agent-03`
+- applies the CRs to the cluster
+- waits for the StatefulSets and ingresses
+- upserts Route53 DNS records when `INSTANCE_ROUTE53_ZONE_ID` is set
+- prints each instance's domain and gateway token at the end
+
 ## Why this manifest disables ClawPort
 
 This EKS recipe intentionally exposes the OpenClaw gateway dashboard instead of
@@ -190,6 +232,7 @@ kubectl get openclawinstance -n openclaw
 kubectl get pods -n openclaw
 kubectl get svc -n openclaw xai-assistant
 kubectl get ingress -n openclaw xai-assistant
+make instance-access OPENCLAW_NAMESPACE=openclaw
 ```
 
 Confirm the public host serves the gateway dashboard:

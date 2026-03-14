@@ -1,0 +1,121 @@
+# Replace the two hostnames with domains covered by your ACM certificate
+# before applying this manifest.
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawInstance
+metadata:
+  name: openclaw-a
+  namespace: openclaw
+spec:
+  clawport:
+    enabled: false
+  envFrom:
+    - secretRef:
+        name: xai-provider-keys
+  config:
+    raw:
+      agents:
+        defaults:
+          model:
+            primary: "xai/grok-4-1-fast-reasoning"
+      models:
+        mode: "merge"
+        providers:
+          xai:
+            api: "openai-completions"
+            apiKey: "${XAI_API_KEY}"
+            baseUrl: "https://api.x.ai/v1"
+            models:
+              - id: "grok-4-1-fast-reasoning"
+                name: "Grok 4.1 Fast Reasoning"
+                reasoning: true
+                input:
+                  - "text"
+                contextWindow: 200000
+                maxTokens: 8192
+  storage:
+    persistence:
+      enabled: true
+      storageClass: auto-ebs-gp3
+      size: 10Gi
+  networking:
+    service:
+      type: ClusterIP
+    ingress:
+      enabled: true
+      className: openclaw-alb
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internet-facing
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+        alb.ingress.kubernetes.io/ssl-redirect: "443"
+        alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=3600
+        alb.ingress.kubernetes.io/healthcheck-path: /healthz
+      hosts:
+        - host: openclaw-a.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              port: 18789
+      tls:
+        - hosts:
+            - openclaw-a.example.com
+---
+apiVersion: openclaw.rocks/v1alpha1
+kind: OpenClawInstance
+metadata:
+  name: openclaw-b
+  namespace: openclaw
+spec:
+  clawport:
+    enabled: false
+  envFrom:
+    - secretRef:
+        name: xai-provider-keys
+  config:
+    raw:
+      agents:
+        defaults:
+          model:
+            primary: "xai/grok-4-1-fast-reasoning"
+      models:
+        mode: "merge"
+        providers:
+          xai:
+            api: "openai-completions"
+            apiKey: "${XAI_API_KEY}"
+            baseUrl: "https://api.x.ai/v1"
+            models:
+              - id: "grok-4-1-fast-reasoning"
+                name: "Grok 4.1 Fast Reasoning"
+                reasoning: true
+                input:
+                  - "text"
+                contextWindow: 200000
+                maxTokens: 8192
+  storage:
+    persistence:
+      enabled: true
+      storageClass: auto-ebs-gp3
+      size: 10Gi
+  networking:
+    service:
+      type: ClusterIP
+    ingress:
+      enabled: true
+      className: openclaw-alb
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internet-facing
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+        alb.ingress.kubernetes.io/ssl-redirect: "443"
+        alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=3600
+        alb.ingress.kubernetes.io/healthcheck-path: /healthz
+      hosts:
+        - host: openclaw-b.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              port: 18789
+      tls:
+        - hosts:
+            - openclaw-b.example.com

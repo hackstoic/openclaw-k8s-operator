@@ -1,0 +1,19 @@
+agents:
+  defaults:
+    model:
+      primary: "xai/grok-4-1-fast-reasoning"
+models:
+  mode: "merge"
+  providers:
+    xai:
+      api: "openai-completions"
+      apiKey: "${XAI_API_KEY}"
+      baseUrl: "https://api.x.ai/v1"
+      models:
+        - id: "grok-4-1-fast-reasoning"
+          name: "Grok 4.1 Fast Reasoning"
+          reasoning: true
+          input:
+            - "text"
+          contextWindow: 200000
+          maxTokens: 8192

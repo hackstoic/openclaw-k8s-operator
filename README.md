@@ -626,6 +626,24 @@ spec:
 
 For Traefik ingress, a `Middleware` CRD resource is created automatically (requires Traefik CRDs installed).
 
+### Multiple instances with dedicated domains
+
+The operator already supports running multiple `OpenClawInstance` resources in the
+same cluster. The key is to give each instance its own name and its own Ingress
+host. A ready-to-edit EKS example with two instances lives at
+`deploy/eks/two-openclaw-instances.example.yaml`.
+
+- Use a different `metadata.name` for each instance so PVCs, Services, Secrets,
+  and other managed resources stay isolated
+- Give each instance a unique `spec.networking.ingress.hosts[].host`
+- Make sure your TLS certificate and DNS records cover every host you assign
+- Retrieve the current access details with `make instance-access OPENCLAW_NAMESPACE=openclaw`
+- For numbered bulk deploys, use `make deploy-instances INSTANCE_COUNT=3 INSTANCE_PREFIX=agent INSTANCE_DOMAIN_TEMPLATE='{name}.example.com'`
+
+`make instance-access` reads each instance's configured Ingress hosts plus the
+gateway token stored in the per-instance Secret tracked by
+`status.managedResources.gatewayTokenSecret`.
+
 ### Custom service ports
 
 By default the operator creates a Service with ClawPort Web (`3000`), gateway (`18789`), and canvas (`18793`) ports. To expose custom ports instead (e.g., for a non-default application), set `spec.networking.service.ports`:

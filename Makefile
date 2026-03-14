@@ -1,5 +1,15 @@
 # Image URL to use all building/pushing image targets
 IMG ?= ghcr.io/openclaw-rocks/openclaw-operator:latest
+OPENCLAW_NAMESPACE ?= openclaw
+INSTANCE_COUNT ?= 2
+INSTANCE_PREFIX ?= openclaw
+INSTANCE_DOMAIN_TEMPLATE ?= {name}.example.com
+INSTANCE_PROVIDER_SECRET ?= xai-provider-keys
+INSTANCE_INGRESS_CLASS ?= openclaw-alb
+INSTANCE_STORAGE_CLASS ?= auto-ebs-gp3
+INSTANCE_STORAGE_SIZE ?= 10Gi
+INSTANCE_RAW_CONFIG_FILE ?= deploy/eks/raw-config.xai.yaml
+INSTANCE_ROUTE53_ZONE_ID ?=
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.31.0
@@ -64,6 +74,38 @@ scorecard: operator-sdk ## Run operator-sdk scorecard tests.
 .PHONY: bench
 bench: ## Run benchmarks for resource builders.
 	go test ./internal/resources/ -bench=. -benchmem -run=^$$ -count=1
+
+.PHONY: instance-access
+instance-access: ## Print ingress domains and gateway tokens for OpenClaw instances. Use OPENCLAW_NAMESPACE=...
+	@bash hack/list-instance-access.sh "$(OPENCLAW_NAMESPACE)"
+
+.PHONY: generate-instances
+generate-instances: ## Generate N OpenClawInstance manifests. Override INSTANCE_* variables as needed.
+	@python3 hack/deploy_openclaw_instances.py \
+		--count "$(INSTANCE_COUNT)" \
+		--name-prefix "$(INSTANCE_PREFIX)" \
+		--namespace "$(OPENCLAW_NAMESPACE)" \
+		--domain-template '$(INSTANCE_DOMAIN_TEMPLATE)' \
+		--provider-secret "$(INSTANCE_PROVIDER_SECRET)" \
+		--ingress-class "$(INSTANCE_INGRESS_CLASS)" \
+		--storage-class "$(INSTANCE_STORAGE_CLASS)" \
+		--storage-size "$(INSTANCE_STORAGE_SIZE)" \
+		--raw-config-file "$(INSTANCE_RAW_CONFIG_FILE)"
+
+.PHONY: deploy-instances
+deploy-instances: ## Generate, apply, wait, optionally upsert Route53, then print access details.
+	@python3 hack/deploy_openclaw_instances.py \
+		--count "$(INSTANCE_COUNT)" \
+		--name-prefix "$(INSTANCE_PREFIX)" \
+		--namespace "$(OPENCLAW_NAMESPACE)" \
+		--domain-template '$(INSTANCE_DOMAIN_TEMPLATE)' \
+		--provider-secret "$(INSTANCE_PROVIDER_SECRET)" \
+		--ingress-class "$(INSTANCE_INGRESS_CLASS)" \
+		--storage-class "$(INSTANCE_STORAGE_CLASS)" \
+		--storage-size "$(INSTANCE_STORAGE_SIZE)" \
+		--raw-config-file "$(INSTANCE_RAW_CONFIG_FILE)" \
+		$(if $(INSTANCE_ROUTE53_ZONE_ID),--route53-zone-id "$(INSTANCE_ROUTE53_ZONE_ID)",) \
+		--apply
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.

@@ -944,6 +944,119 @@ var _ = Describe("OpenClawInstance Controller", func() {
 		})
 	})
 
+	Context("When creating multiple OpenClawInstances with dedicated ingress hosts", func() {
+		var namespace string
+
+		BeforeEach(func() {
+			namespace = "test-multi-instance-" + time.Now().Format("20060102150405")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+		})
+
+		AfterEach(func() {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			_ = k8sClient.Delete(ctx, ns)
+		})
+
+		It("Should keep ingress hosts and gateway tokens isolated per instance", func() {
+			className := "nginx"
+			hostByName := map[string]string{
+				"multi-a": "multi-a.example.com",
+				"multi-b": "multi-b.example.com",
+			}
+
+			for name, host := range hostByName {
+				instance := &openclawv1alpha1.OpenClawInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      name,
+						Namespace: namespace,
+						Annotations: map[string]string{
+							"openclaw.rocks/skip-backup": "true",
+						},
+					},
+					Spec: openclawv1alpha1.OpenClawInstanceSpec{
+						Image: openclawv1alpha1.ImageSpec{
+							Repository: "ghcr.io/openclaw/openclaw",
+							Tag:        "latest",
+						},
+						ClawPort: openclawv1alpha1.ClawPortSpec{
+							Enabled: resources.Ptr(false),
+						},
+						Networking: openclawv1alpha1.NetworkingSpec{
+							Ingress: openclawv1alpha1.IngressSpec{
+								Enabled:   true,
+								ClassName: &className,
+								Hosts: []openclawv1alpha1.IngressHost{
+									{
+										Host: host,
+										Paths: []openclawv1alpha1.IngressPath{
+											{
+												Path:     "/",
+												PathType: "Prefix",
+												Port:     resources.Ptr(int32(resources.GatewayPort)),
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, instance)).Should(Succeed())
+			}
+
+			tokens := make(map[string]string, len(hostByName))
+			for name, host := range hostByName {
+				ingress := &networkingv1.Ingress{}
+				Eventually(func() error {
+					return k8sClient.Get(ctx, types.NamespacedName{
+						Name:      name,
+						Namespace: namespace,
+					}, ingress)
+				}, timeout, interval).Should(Succeed())
+				Expect(ingress.Spec.Rules).To(HaveLen(1))
+				Expect(ingress.Spec.Rules[0].Host).To(Equal(host))
+				Expect(ingress.Spec.Rules[0].HTTP).NotTo(BeNil())
+				Expect(ingress.Spec.Rules[0].HTTP.Paths).To(HaveLen(1))
+				Expect(ingress.Spec.Rules[0].HTTP.Paths[0].Backend.Service).NotTo(BeNil())
+				Expect(ingress.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Port.Number).To(Equal(int32(resources.GatewayPort)))
+
+				secret := &corev1.Secret{}
+				Eventually(func() error {
+					return k8sClient.Get(ctx, types.NamespacedName{
+						Name:      name + "-gateway-token",
+						Namespace: namespace,
+					}, secret)
+				}, timeout, interval).Should(Succeed())
+
+				token := string(secret.Data[resources.GatewayTokenSecretKey])
+				Expect(token).NotTo(BeEmpty())
+				tokens[name] = token
+
+				created := &openclawv1alpha1.OpenClawInstance{}
+				Eventually(func() string {
+					if err := k8sClient.Get(ctx, types.NamespacedName{
+						Name:      name,
+						Namespace: namespace,
+					}, created); err != nil {
+						return ""
+					}
+					return created.Status.ManagedResources.GatewayTokenSecret
+				}, timeout, interval).Should(Equal(name + "-gateway-token"))
+			}
+
+			Expect(tokens["multi-a"]).NotTo(Equal(tokens["multi-b"]))
+		})
+	})
+
 	Context("When creating an OpenClawInstance with custom service ports (#144)", func() {
 		var namespace string
 

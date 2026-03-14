@@ -5,7 +5,7 @@ metadata:
 spec:
   scheme: internet-facing
   certificateARNs:
-    - arn:aws:acm:ap-northeast-1:914945738914:certificate/b875a2da-bf5f-463c-9e15-f3c3b8ba3d78
+    - arn:aws:acm:ap-northeast-1:914945738914:certificate/4762bb43-dbf9-4994-9846-d9ad57f06663
   namespaceSelector:
     matchLabels:
       kubernetes.io/metadata.name: openclaw
